@@ -1,3 +1,9 @@
+const WEAK_DELAY = 60
+const PORT = 5
+const RAM_SAFETY_FACTOR = 4 // save room for 4 extra hacks when scheduling grows
+const target = 'rho-construction'
+const host = 'home'
+
 /*
  
 My basic idea with this one is to 
@@ -58,14 +64,16 @@ export async function main(ns) {
     console.log('Finished:')
     obj.finished.slice(0, 40).forEach(o => console.log(o?.eEnd, o?.command))
   }
+  obj.getCounts = () => {
+    console.log(JSON.stringify(obj.processing.reduce((p, c) => { p[c.command]++; return p; }, {weak:0,grow:0,hack:0})))
 
-  const target = 'rho-construction'
-  const host = 'home'
+  }
 
   // port used for scripts reporting start and end information
-  const PORT = 5
   const handle = ns.getPortHandle(PORT)
   handle.clear()
+  const handle2 = ns.getPortHandle(PORT + 1)
+  handle2.clear()
 
   // disable logs
   var logsToDisable = ['sleep', 'exec', 'getServerUsedRam', 'getServerMaxRam', 'scp']
@@ -76,7 +84,6 @@ export async function main(ns) {
    * @type {Object<string,Worker}
    */
   let workers = {}
-  let oldWorkers = {} // temp storage for ended weak workers before continue
   obj.workers = workers
 
   /**
@@ -140,6 +147,7 @@ export async function main(ns) {
     grow: 0,
     hack: 0
   }
+  obj.counts = counts
 
   // ensure host has the most recent scripts
   const copyFilesToServer = async (hostname) => {
@@ -177,96 +185,85 @@ export async function main(ns) {
    * If port has any messages available, process them
    */
   const processIncomingMessages = () => {
+    let messages = []
     while (!handle.empty()) {
-      let msg = handle.read()
-      let msgObject = ''
-      try {
-        msgObject = JSON.parse(msg)
-      } catch (err) {
-        EXIT(`invalid json`, {json: msg})
-      }
-      obj.messages[obj.messages.length] = msgObject
+      messages[messages.length] = JSON.parse(handle.read())
+    }
+    while (!handle2.empty()) {
+      messages[messages.length] = JSON.parse(handle2.read())
+    }
+    if (messages.length === 0) return
+
+    // sort 'end' first, then by id
+    messages.sort((a, b) => {
+      if (a.message === 'end' && b.message !== 'end') return -1
+      if (b.message === 'end' && a.message !== 'end') return 1
+      return a.id - b.id
+    })
+
+    messages.forEach(msg => {
+      obj.messages[obj.messages.length] = msg
+      let { message, id, command, start, time, eEnd, end, result}  = msg
+      let worker = workers[id]
+      if (!worker) EXIT(`Got message for unknown worker ${id}`, {msg, workers})
 
       // ------------------------------ start message ------------------------------
       // { id, message: 'start', command: 'weak', start, time, eEnd }
       // Here we need to update our Worker with the new information and place
       // it into the processing array.
-      if (msgObject.message === 'start') {
-        let { id, command, start, time, eEnd } = msgObject
-        let worker = workers[id]
-        if (!worker) {
-          EXIT(`Got start for unknown worker ${id}`, {msgObject, workers})
-        }
+      if (message === 'start') {
         let index = findProcessing({ id, eEnd })
-        if (processing.length > 0 && compareWorkers({ id, eEnd }, processing[index]) === 0) {
-          // OH NO!  The worker should have been removed by the 'end' message code below
-          EXIT('got start message for worker already in array!', {
-            processing, msg, msgObject, worker, index,
-            msg, msgObject, worker, index, processingLength: processing.length, processing: processing[index]
-          })
-        }
+        if (compareWorkers({ id, eEnd }, processing[index]) === 0)  EXIT('got start message for worker already in array!', { msg, processing, workers })
+
         // insert into array at the right spot
+        // DEBUG(`Inserting ${workerId} eEnd ${eEnd} at index ${index}`)
+        // DEBUG(`Between ${processing[index-1]?.eEnd} and ${processing[index]?.eEnd}`)
         Object.assign(worker, { start, time, eEnd })
-        DEBUG(`Inserting ${worker.eEnd} at index ${index}`)
-        DEBUG(`Between ${processing[index-1]?.eEnd} and ${processing[index]?.eEnd}`)
         processing = processing.slice(0, index).concat([worker]).concat(processing.slice(index))
         obj.processing = processing
         counts[command]++
-      } else if (msgObject.message === 'continue') {
-        // this is for later start calls on weaken
-        // { id, message: 'continue', command: 'weak', start, time, eEnd, oldId }
-        let { id, command, start, time, eEnd, oldId } = msgObject
-        let { pid, execStart, execEnd, execTime, host } = workers[oldId] || oldWorkers[oldId]
-        delete oldWorkers[oldId]
+      } else if (message === 'continue') {
+        // this is for end and restart of 'weak' commands -- end and result are for previous run
+        // { id, message: 'continue', command: 'weak', start, time, eEnd, end, result }
         
-        /** @type{Worker} */
-        const worker = {
-          id,
-          command,
-          start,
-          time,
-          eEnd,
-          end: null,
-          result: null,
-          execStart,
-          execEnd,
-          execTime,
-          host,
-          pid,
-        }
-        workers[worker.id] = worker
-        let index = findProcessing(worker)
-        processing = processing.slice(0, index).concat([worker]).concat(processing.slice(index))
+        // the first time we get a continue, disable scheduling new weak
+        nextWeak = 0
+
+        // create copy of worker with results for debug logging
+        let workerCopy = {...worker, end, result}
+        obj.finished[obj.finished.length] = workerCopy
+
+        // remove previous spot in processing with old eEnd
+        let oldIndex = findProcessing(worker)
+        processing = processing.slice(0, oldIndex).concat(processing.slice(oldIndex + 1))
+
+        // update worker and insert into new position with new eEnd
+        Object.assign(worker, { start, time, eEnd, end: null, result: null })
+        let newIndex = findProcessing(worker)
+        processing = processing.slice(0, newIndex).concat([worker]).concat(processing.slice(newIndex))
+
+        // update debug object on window
         obj.processing = processing
-      } else if (msgObject.message === 'end') {
+      } else if (message === 'end') {
         // ------------------------------ end message ------------------------------
-        // { id, message: 'end', command: 'weak', end, result }
+        // { id, message: 'end', command: 'grow', end, result }
         // Update end information and remove from processing array
-        let { id, command, end, result } = msgObject
-        let worker = workers[id]
-        let index = findProcessing(worker) // TODO: error if worker is undefined, I think I need to separate out continuous weakens
-        if (processing.length === 0 || compareWorkers(worker, processing[index]) !== 0) {
-          // OH NO!   We got an message for a worker we don't know is processing
-          EXIT(`got end message for worker missing from array!`, {msg, msgObject, worker, index, processingLength: processing.length, processing: processing[index]})
-        } else {
-          // delete worker from processing array
-          processing = processing.slice(0, index).concat(processing.slice(index + 1))
-          obj.processing = processing
-        }
+        let index = findProcessing(worker)
+        if (compareWorkers(worker, processing[index]) !== 0) EXIT(`got end message for worker missing from array!`, {msg, worker, index, processingLength: processing.length, processing: processing[index]})
+
+        // delete worker from processing array
+        processing = processing.slice(0, index).concat(processing.slice(index + 1))
+        obj.processing = processing
+
         worker.end = end
         worker.result = result
-        counts[msgObject.command]--
-        obj.finished[obj.finished.length] = {command: msgObject.Command, time: new Date().valueOf(), result: worker.result, worker}
-        if (command === 'weak') {
-          // going to get a 'continue' for these, so keep the info as needed
-          oldWorkers[id] = workers[id]
-          nextWeak = 0
-        }
+        counts[command]--
+        obj.finished[obj.finished.length] = worker
         delete workers[id]
       } else {
-        EXIT(`unknown message ${msgObject.message}`, {msg, msgObject})
+        EXIT(`unknown message ${message}`, msg)
       }
-    }
+    });
   }
 
   // we run weakens every 50ms until we get the first response saying
@@ -347,6 +344,10 @@ export async function main(ns) {
 
   let lastGrowCreatedAt = 0
   let lastHackCreatedAt = 0
+  let expectedWeak = Math.ceil(ns.getWeakenTime(target) / WEAK_DELAY)
+  // method is weak, weak, grow, weak, weak, grow with hack in between
+  let possibleHacks = Math.ceil(ns.getHackTime(target) / (WEAK_DELAY  * 4))
+
 
   //----------------------------------------------------------------------------------------------------
   // main loop
@@ -355,6 +356,9 @@ export async function main(ns) {
     processIncomingMessages()
 
     let ram = hostMaxRam - ns.getServerUsedRam(host)
+    if (ram < hackScriptRam * 12) {
+      EXIT('Not enough ram!  Tweak your settings...', {ram, hostMaxRam, hackScriptRam})
+    }
     obj.stats = { time: new Date().toLocaleTimeString(), processing: processing.length, finished: obj.finished.length, hostMaxRam, ram, counts }
 
     // schedule weakens every 50ms until we receive our first finish
@@ -366,8 +370,8 @@ export async function main(ns) {
       // we can use other servers for weak
       let useHost = findOtherServer(weakScriptRam) || host
       if (createWorker(useHost, 'weak', 1, id, duration, eEnd)) {
-        nextWeak += 100
-        await ns.sleep(1) // allows immediate scheduling
+        nextWeak += WEAK_DELAY
+        await ns.sleep(10)
         DEBUG(`Created weak ${id} ending ${eEnd}`)
         continue
       }
@@ -375,9 +379,16 @@ export async function main(ns) {
 
     // schedule grows only when there are two weakens guaranteed before
     // it and two weakens guaranteed after it, and reserve ram for enough
-    // hacks so that we have two grows per hack
-    let missingHackRam = (Math.ceil(counts.grow / 2) - counts.hack) * hackScriptRam * 12
-    if (ram >  missingHackRam + growScriptRam * 12) {
+    // hacks so that we have two grows per hack.  We can schedule 8 times
+    // as many grows (since we use two grow per hack) since hacks only
+    // last 1/4 as long
+    let missingHack = Math.max(possibleHacks - counts.hack, 0)
+    let missingHackRam = missingHack * hackScriptRam * 12
+    let missingWeak = Math.max(expectedWeak - counts.weak, 0)
+    let missingWeakRam = missingWeak * weakScriptRam
+    let missingRam = missingHackRam + missingWeakRam + (RAM_SAFETY_FACTOR * hackScriptRam * 12)
+    obj.missing = { missingHack, missingHackRam, missingWeak, missingWeakRam, missingRam, ram, counts }
+    if (ram >  missingRam + growScriptRam * 12) {
       let duration = ns.getGrowTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
@@ -385,14 +396,10 @@ export async function main(ns) {
       let index = findProcessing({ eEnd, id })
       const previousTwoAreWeak = processing[index - 1]?.command === 'weak' && processing[index - 2]?.command === 'weak'
       const nextTwoAreWeak = processing[index]?.command === 'weak' && processing[index + 1]?.command === 'weak'
-      if (previousTwoAreWeak && nextTwoAreWeak) {
-        if (lastGrowCreatedAt > id - 20) {
-          await ns.sleep(1)
-          continue
-        }
+      if (previousTwoAreWeak && nextTwoAreWeak && lastGrowCreatedAt < id - 20) {
         lastGrowCreatedAt = id
         if (createWorker(host, 'grow', 12, id, duration, eEnd)) {
-          await ns.sleep(1)
+          await ns.sleep(10)
           DEBUG(`Creating grow ${id} ending ${eEnd} (processing[0] at ${processing[0].eEnd})`)
           DEBUG(`  Previous 10: ${processing.slice(index - 10, index).map(x => x.command).join(',')}`)
           DEBUG(`  Next 10    : ${processing.slice(index, index + 10).map(x => x.command).join(',')}`)
@@ -403,7 +410,7 @@ export async function main(ns) {
       }
     }
 
-    if (ram > hackScriptRam * 12) {
+    if (ram >= hackScriptRam * 12) {
       let duration = ns.getHackTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
@@ -415,43 +422,45 @@ export async function main(ns) {
         if (processing.length > 0 && processing[0].eEnd - eEnd < 200 && processing[0].eEnd > eEnd) {
           if (createWorker(host, 'hack', 12, id, duration, eEnd)) {
             firstHack = false
-            await ns.sleep(1)
+            await ns.sleep(10)
             DEBUG(`Created FIRST hack ${id} ending ${eEnd} (processing[0] at ${processing[0].eEnd})`)
             DEBUG(`  Next 5    : ${processing.slice(0, 5).map(x => x.command).join(',')}`)
             continue
           }
         }
       } else {
+        // ignore current for grow calculation if it is a grow
         // count previous grow until we reach beginning of list or another hack
         let pastGrows = 0
         for (let i = index - 1; i >= 0; i--) {
           let w = processing[i]
           if (w.command === 'hack') break
-          if (w.command === 'grow') pastGrows++
+          if (w.command === 'grow' && Math.abs(w.eEnd - eEnd) > 15) pastGrows++
         }
         
-        // count guture grow until we reach beginning of list or another hack
+        // count future grow until we reach end of list or another hack
         let futureGrows = 0
-        for (let i = index; i < processing.length; i--) {
+        for (let i = index; i < processing.length; i++) {
           let w = processing[i]
           if (w.command === 'hack') break
-          if (w.command === 'grow') futureGrows++
+          if (w.command === 'grow' && Math.abs(w.eEnd - eEnd) > 15) futureGrows++
         }
         
-        const previousIsWeak = processing[index - 1]?.command === 'weak'
-        const nextIsWeak = processing[index]?.command === 'weak'
+        // skip current/previous for weaken find if it is within 20ms
+        const timeDiffCurrent = Math.abs(processing[index]?.eEnd - eEnd)
+        const timeDiffPrevious = Math.abs(processing[index - 1]?.eEnd - eEnd)
+        const skipCurrent = timeDiffCurrent < 10 ? 1 : 0
+        const skipPrevious = timeDiffPrevious < 2 ? 1 : 0
+        const previousIsWeak = processing[index - 1]?.command === 'weak' && processing[index - 1 - skipPrevious]?.command === 'weak'
+        const nextIsWeak = processing[index]?.command === 'weak' && processing[index + skipCurrent]?.command === 'weak'
 
-        if (previousIsWeak && nextIsWeak && pastGrows >= 2 && futureGrows >= 2) {
-          if (lastHackCreatedAt > id - 20) {
-            await ns.sleep(1)
-            continue
-          }
+        if (previousIsWeak && nextIsWeak && pastGrows >= 2 && futureGrows >= 2 && lastHackCreatedAt < id - 20 ) {
           lastHackCreatedAt = id
           if (createWorker(host, 'hack', 12, id, duration, eEnd)) {
-            await ns.sleep(1)
-            DEBUG(`Creating hack ${id} ending ${eEnd}`)
-            DEBUG(`  Previous 10: ${processing.slice(index - 10, index).map(x => x.command).join(',')}`)
-            DEBUG(`  Next 10    : ${processing.slice(index, index + 10).map(x => x.command).join(',')}`)
+            await ns.sleep(10)
+            // DEBUG(`Creating hack ${id} ending ${eEnd}`)
+            // DEBUG(`  Previous 10: ${processing.slice(index - 10, index).map(x => x.command).join(',')}`)
+            // DEBUG(`  Next 10    : ${processing.slice(index, index + 10).map(x => x.command).join(',')}`)
             continue
           }
         }
