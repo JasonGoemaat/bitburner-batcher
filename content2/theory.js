@@ -67,5 +67,9 @@ export async function main(ns) {
   const cycleIncome = realActiveBatches * hacks * hackMoney * hackChance
   const activeTime = (3600000 - weakenTime) // after warm-up
   const activeIncome = activeTime / cycleLength * cycleIncome
-  ns.tprint(`Theoretical active income after warm-up: ${ns.nFormat(activeIncome, "$0.000a")}`)
+  
+  const futureTime = 3600000
+  const futureIncome = futureTime / cycleLength * cycleIncome
+  ns.tprint(`Theoretical active income in 1 hour after warm-up: ${ns.nFormat(activeIncome, "$0.000a")}`)
+  ns.tprint(`Theoretical active income after first hour       : ${ns.nFormat(futureIncome, "$0.000a")}`)
 }
