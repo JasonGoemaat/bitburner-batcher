@@ -1,11 +1,14 @@
 /** @param {NS} ns */
 export async function main(ns) {
-  let [target] = ns.args
+  let [target, levels, batchDuration] = ns.args
   target = target || 'rho-construction'
+  levels = levels || 0
+  batchDuration = batchDuration || 0 // time between hacks
   let ram = ns.getServerMaxRam('home') - ns.getScriptRam('batcher-clean.js')
   
   const server = ns.getServer(target)
   const player = ns.getPlayer()
+  if (levels) player.skills.hacking += levels
   const prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
   const hackTime = ns.formulas.hacking.hackTime(server, player)
   const hackChance = ns.formulas.hacking.hackChance(server, player)
@@ -63,13 +66,14 @@ export async function main(ns) {
 
   // the active batches form a cycle that lasts hackTime seconds, during which
   // time we will finish realActiveBatches
-  const cycleLength = hackTime
+  const cycleLength = hackTime + activeBatches + batchDuration
   const cycleIncome = realActiveBatches * hacks * hackMoney * hackChance
   const activeTime = (3600000 - weakenTime) // after warm-up
   const activeIncome = activeTime / cycleLength * cycleIncome
   
   const futureTime = 3600000
   const futureIncome = futureTime / cycleLength * cycleIncome
+  ns.tprint(`Server ${target}, Player Level ${player.skills.hacking}`)
   ns.tprint(`Theoretical active income in 1 hour after warm-up: ${ns.nFormat(activeIncome, "$0.000a")}`)
   ns.tprint(`Theoretical active income after first hour       : ${ns.nFormat(futureIncome, "$0.000a")}`)
 }
