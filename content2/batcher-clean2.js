@@ -92,9 +92,9 @@ export async function main(ns) {
     return min;
   }
 
-  const growScriptRam = ns.getScriptRam('/remote/grow.js') * GROW_THREADS
-  const hackScriptRam = ns.getScriptRam('/remote/hack.js') * HACK_THREADS
-  const weakScriptRam = ns.getScriptRam('/remote/weak.js') * WEAK_THREADS
+  const growScriptRam = ns.getScriptRam('/remote/grow2.js') * GROW_THREADS
+  const hackScriptRam = ns.getScriptRam('/remote/hack2.js') * HACK_THREADS
+  const weakScriptRam = ns.getScriptRam('/remote/weak2.js') * WEAK_THREADS
 
   /**
    * How many scripts are currently executing, used to calculate ram usage
@@ -111,7 +111,7 @@ export async function main(ns) {
   // ensure hosts have the most recent scripts
   const copyFilesToServer = async (hostname) => {
     ns.print(`Copying files to host ${hostname}`)
-    await ns.scp(['/remote/weak.js', '/remote/grow.js', '/remote/hack.js'], hostname)
+    await ns.scp(['/remote/weak2.js', '/remote/grow2.js', '/remote/hack2.js'], hostname)
   }
   if (host !== 'home') {
     await copyFilesToServer(host)
@@ -266,12 +266,21 @@ export async function main(ns) {
     }
 
     workers[id] = worker
-    const scriptFile = `/remote/${command}.js`
+    const scriptFile = `/remote/${command}2.js`
     worker.pid = ns.exec(scriptFile, host, threads, target, id, command, PORT, execTime)
     if (!worker.pid) {
       EXIT(`could not exec() script`, {args: [scriptFile, host, threads, target, id, command, PORT], worker})  
     }
     return worker
+  }
+
+  /**
+   * Clean up processing[]:
+   * 
+   * 1. 
+   */
+  const cleanup = () => {
+
   }
 
   ns.tprint(`Starting main loop at ${new Date().toLocaleTimeString()}`)
