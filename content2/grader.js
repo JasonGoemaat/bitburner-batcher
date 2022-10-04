@@ -1,5 +1,5 @@
 // --- CONFIG SECTION ---
-const testFile="batcher.js"; //File to run to initiate testing
+const testFile="batcher-clean.js"; //File to run to initiate testing
 const testFileArgs=[]; //Any arguments to be sent to the test file
 const testTimeLimit=1000*60*60; //Graded time, default is 1hr.
 // --- END CONFIG SECTION ---

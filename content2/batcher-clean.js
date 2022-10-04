@@ -1,27 +1,11 @@
 const WEAK_DELAY = 75
+const WEAK_THREADS = 1
+const GROW_THREADS = 12
+const HACK_THREADS = 12
 const PORT = 5
 const RAM_SAFETY_FACTOR = 4 // save room for 4 extra hacks when scheduling grows
 const target = 'rho-construction'
 const host = 'home'
-
-/*
- 
-My basic idea with this one is to 
-
-1. Ramp up weakens every 50ms or so until first batch starts hitting
-2. ID each script using the current time just before calling 'exec'
-3. Have scripts communicate perfectly accurate finish time using ports
-4. Keep track of how many grows and hacks are in-process and allow based on that
-  * grow() takes 4x the time of hack()
-  * don't schedule grows unless the memory available minus missing hacks() meet criteria
-5. Maintain separate lists of grow, hack, and weaken that are executing
-6. Prefer schedule like weakenx2/grow1/weakenx2/grow2, and fit hacks in between those weakens
-  * this means that when we schedule grow, we leave at least two weakens behind it
-      since the previous grow, there should be no hacks
-  * when scheduling hacks, it can either be within 100ms of the FIRST weaken finishing,
-      or between two weakens with a straight path back to a grow
-
-*/
 
 /**
  * @typedef Worker
@@ -46,59 +30,35 @@ My basic idea with this one is to
  * @property {number} hack - how many hack are currently executing
  */
 
-
-
 /** @param {NS} ns */
 export async function main(ns) {
-  // "cheat" with a window object for the purpose of logging and investigation
-  const obj = eval("window.obj = {}")
-  obj.finished = []
-  obj.started = []
-  obj.processing = []
-  obj.errors = []
-  obj.stats = {}
-  obj.messages = []
-  obj.show = () => {
-    console.log('Processing:')
-    obj.processing.slice(0, 40).forEach(o => console.log(o?.eEnd, o?.command))
-    console.log('Finished:')
-    obj.finished.slice(0, 40).forEach(o => console.log(o?.eEnd, o?.command))
-  }
-  obj.getCounts = () => {
-    console.log(JSON.stringify(obj.processing.reduce((p, c) => { p[c.command]++; return p; }, {weak:0,grow:0,hack:0})))
-
-  }
-
-  // port used for scripts reporting start and end information
-  const handle = ns.getPortHandle(PORT)
-  handle.clear()
-  const handle2 = ns.getPortHandle(PORT + 1)
-  handle2.clear()
+  // ports used for scripts reporting start and end information
+  const handle = ns.getPortHandle(PORT); handle.clear()
+  const handle2 = ns.getPortHandle(PORT + 1); handle2.clear()
 
   // disable logs
   var logsToDisable = ['sleep', 'exec', 'getServerUsedRam', 'getServerMaxRam', 'scp']
   logsToDisable.forEach(name => ns.disableLog(name))
 
   /**
-   * Object containing all active workers.  Added to prior to exec()
+   * Object containing all active workers, key is exec time.
    * @type {Object<string,Worker}
    */
   let workers = {}
-  obj.workers = workers
 
   /**
-   * Array of workers, populated after message was received from script and sorted
-   * by eEnd - expected end time set by script with accurate start time and
-   * time the command should take to run.  This is used for scheduling and binary
-   * searches are used to find things quickly.
+   * Array of workers, populated after start/continue message is received from
+   * worker script and sorted by eEnd - expected end time set by script with
+   * accurate start time and duration.
    *
    * @type {Worker[]}
    */
    let processing = []
-   obj.processing = processing
 
   /**
-   * Function to compare workers using eEnd and then id
+   * Function to compare workers using eEnd and then id, used to keep
+   * processing[] sorted and perform binary searches to find slots for
+   * scheduling when we know the end time.
    * 
    * @param {Worker} worker1
    * @param {Worker} worker2
@@ -111,7 +71,6 @@ export async function main(ns) {
     if (worker1.id < worker2.id) return -1
     return 0
   }
-  obj.compareWorkers = compareWorkers
 
   /**
    * Use binary search to quickly find worker or location to insert a new worker
@@ -132,14 +91,15 @@ export async function main(ns) {
     }
     return min;
   }
-  obj.findProcessing = findProcessing
 
-  const growScriptRam = ns.getScriptRam('/remote/grow.js')
-  const hackScriptRam = ns.getScriptRam('/remote/hack.js')
-  const weakScriptRam = ns.getScriptRam('/remote/weak.js')
+  const growScriptRam = ns.getScriptRam('/remote/grow.js') * GROW_THREADS
+  const hackScriptRam = ns.getScriptRam('/remote/hack.js') * HACK_THREADS
+  const weakScriptRam = ns.getScriptRam('/remote/weak.js') * WEAK_THREADS
 
   /**
-   * How many scripts are currently executing, for calculating ram usage
+   * How many scripts are currently executing, used to calculate ram usage
+   * when scheduling grows so we leave room for hacks.
+   * 
    * @type {Counts}
    */
    const counts = {
@@ -147,9 +107,8 @@ export async function main(ns) {
     grow: 0,
     hack: 0
   }
-  obj.counts = counts
 
-  // ensure host has the most recent scripts
+  // ensure hosts have the most recent scripts
   const copyFilesToServer = async (hostname) => {
     ns.print(`Copying files to host ${hostname}`)
     await ns.scp(['/remote/weak.js', '/remote/grow.js', '/remote/hack.js'], hostname)
@@ -173,16 +132,16 @@ export async function main(ns) {
   // used to calculate ram available
   const hostMaxRam = ns.getServerMaxRam(host)
 
+  // if we have an error, kill all scripts on all servers and exit
   const EXIT = (message, errorObject) => {
     ns.tprint(`ERROR: ${message}`)
-    obj.error = errorObject
     otherServers.forEach(x => ns.killall(x.hostname))
     ns.killall()
     ns.exit()
   }
 
   /**
-   * If port has any messages available, process them
+   * Process pending messages on ports from worker scripts
    */
   const processIncomingMessages = () => {
     let messages = []
@@ -202,143 +161,70 @@ export async function main(ns) {
     })
 
     messages.forEach(msg => {
-      obj.messages[obj.messages.length] = msg
       let { message, id, command, start, time, eEnd, end, result}  = msg
       let worker = workers[id]
       if (!worker) EXIT(`Got message for unknown worker ${id}`, {msg, workers})
 
       // ------------------------------ start message ------------------------------
       // { id, message: 'start', command: 'weak', start, time, eEnd }
-      // Here we need to update our Worker with the new information and place
-      // it into the processing array.
+      // Worker has actually started and called the method, add to the right spot
+      // in processing[] and update with a more accurate 'eEnd' expected end time.
       if (message === 'start') {
         let index = findProcessing({ id, eEnd })
         if (compareWorkers({ id, eEnd }, processing[index]) === 0)  EXIT('got start message for worker already in array!', { msg, processing, workers })
 
-        // insert into array at the right spot
-        // DEBUG(`Inserting ${workerId} eEnd ${eEnd} at index ${index}`)
-        // DEBUG(`Between ${processing[index-1]?.eEnd} and ${processing[index]?.eEnd}`)
+        // update worker with accurate info and insert into array at the right spot
         Object.assign(worker, { start, time, eEnd })
         processing = processing.slice(0, index).concat([worker]).concat(processing.slice(index))
-        obj.processing = processing
         counts[command]++
       } else if (message === 'continue') {
-        // this is for end and restart of 'weak' commands -- end and result are for previous run
         // { id, message: 'continue', command: 'weak', start, time, eEnd, end, result }
+        // this is for end and restart of 'weak' commands that are running continuously,
+        // with end time and result from previous run and new eEnd and start times
+        // for the new run
         
-        // the first time we get a continue, disable scheduling new weak
+        // the first time we get a continue, disable scheduling new weak commands
         nextWeak = 0
 
-        // create copy of worker with results for debug logging
-        let workerCopy = {...worker, end, result}
-        // obj.finished[obj.finished.length] = workerCopy
-
-        // remove previous spot in processing with old eEnd
+        // remove previous run from processing[]
         let oldIndex = findProcessing(worker)
         processing = processing.slice(0, oldIndex).concat(processing.slice(oldIndex + 1))
 
-        // update worker and insert into new position with new eEnd
+        // update worker and insert into new position in processing[] with new eEnd
         Object.assign(worker, { start, time, eEnd, end: null, result: null })
         let newIndex = findProcessing(worker)
         processing = processing.slice(0, newIndex).concat([worker]).concat(processing.slice(newIndex))
-
-        // update debug object on window
-        obj.processing = processing
       } else if (message === 'end') {
         // ------------------------------ end message ------------------------------
         // { id, message: 'end', command: 'grow', end, result }
-        // Update end information and remove from processing array
+        // Update end information and remove from processing[] and workers{}
         let index = findProcessing(worker)
         if (compareWorkers(worker, processing[index]) !== 0) EXIT(`got end message for worker missing from array!`, {msg, worker, index, processingLength: processing.length, processing: processing[index]})
 
-        // delete worker from processing array
+        // delete worker from processing[] and workers{}, update counts
         processing = processing.slice(0, index).concat(processing.slice(index + 1))
-        obj.processing = processing
-
-        worker.end = end
-        worker.result = result
-        counts[command]--
-        // obj.finished[obj.finished.length] = worker
         delete workers[id]
+        counts[command]--
       } else {
         EXIT(`unknown message ${message}`, msg)
       }
     });
   }
 
-  // we run weakens every 50ms until we get the first response saying
-  // one has finished, then we set to 0
-
   // handle utilizing ram on other servers for weak scripts
   let otherServers = [{"hostname":"n00dles","maxRam":4},{"hostname":"foodnstuff","maxRam":16},{"hostname":"sigma-cosmetics","maxRam":16},{"hostname":"joesguns","maxRam":16},{"hostname":"hong-fang-tea","maxRam":16},{"hostname":"harakiri-sushi","maxRam":16},{"hostname":"iron-gym","maxRam":32},{"hostname":"zer0","maxRam":32},{"hostname":"nectar-net","maxRam":16},{"hostname":"max-hardware","maxRam":32},{"hostname":"CSEC","maxRam":8},{"hostname":"silver-helix","maxRam":64},{"hostname":"phantasy","maxRam":32},{"hostname":"omega-net","maxRam":32},{"hostname":"neo-net","maxRam":32},{"hostname":"netlink","maxRam":16},{"hostname":"avmnite-02h","maxRam":64},{"hostname":"the-hub","maxRam":64},{"hostname":"I.I.I.I","maxRam":64},{"hostname":"summit-uni","maxRam":16},{"hostname":"zb-institute","maxRam":32},{"hostname":"catalyst","maxRam":128},{"hostname":"rothman-uni","maxRam":128},{"hostname":"alpha-ent","maxRam":128},{"hostname":"millenium-fitness","maxRam":64},{"hostname":"lexo-corp","maxRam":32},{"hostname":"aevum-police","maxRam":64},{"hostname":"rho-construction","maxRam":16},{"hostname":"global-pharm","maxRam":16},{"hostname":"omnia","maxRam":64},{"hostname":"unitalife","maxRam":32},{"hostname":"univ-energy","maxRam":128},{"hostname":"solaris","maxRam":16},{"hostname":"titan-labs","maxRam":128},{"hostname":"run4theh111z","maxRam":512},{"hostname":"microdyne","maxRam":64},{"hostname":"fulcrumtech","maxRam":128},{"hostname":"helios","maxRam":64},{"hostname":"vitalife","maxRam":64},{"hostname":".","maxRam":16},{"hostname":"omnitek","maxRam":512},{"hostname":"blade","maxRam":128},{"hostname":"powerhouse-fitness","maxRam":16}]
   let usableServers = [...otherServers]
-  // const report = () => {
-  //   let otherRam = otherServers.reduce((t, x) => t + x.maxRam, 0)
-  //   let otherWeakens = otherServers.reduce((t, x) => t + Math.trunc(x.maxRam / weakScriptRam), 0)
-  //   let hackPercent = ns.formulas.hacking.hackPercent(ns.getServer(target), ns.getPlayer())
-  //   let hackChance = ns.formulas.hacking.hackChance(ns.getServer(target), ns.getPlayer())
-  //   let maxMoney = ns.getServerMaxMoney(target)
-  //   let ramAvailable = ns.getServerMaxRam('home') + otherRam
-  //   let homeRamAvailable = ns.getServerMaxRam('home') - ns.getServerUsedRam('home') + otherWeakens * weakScriptRam
-  //   let batchRam = 12 * hackScriptRam  // one hacking slot has 12 hack threads
-  //       + weakScriptRam * 5 // and will require 5 weaken threads because 5 hacks take the time of one weaken
-  //       + (growScriptRam * 24) * 4 // and will require 96 grow threads, 24 for each hack and grows take 4x as long
-  //       + (weakScriptRam * 2) * 4 * 5/4 // and 10 more weaken threads, 8 for the grows and take 5/4 the time of a grow
-  //   let hackMoney = hackPercent * maxMoney * 12
-  //   // let hackingTimeMs = Math.trunc(3600000 - ns.getWeakenTime(target))
-  //   let hackingTimeMs = Math.trunc(3600000)
-  //   let activeBatches = Math.trunc(homeRamAvailable / batchRam)
-  //   let cycleCount = (hackingTimeMs - ns.getHackTime(target)) / ns.getHackTime(target)
-  //   let totalMoney = cycleCount * activeBatches * hackMoney * hackChance
-  //   ns.tprint(JSON.stringify({ otherRam, otherWeakens, hackPercent, hackChance,
-  //     maxMoney: ns.nFormat(maxMoney, "$0.0a"),
-  //     ramAvailable, homeRamAvailable,
-  //     batchRam, hackingTimeMs,
-  //     hackMoney: ns.nFormat(hackMoney, "$0.0a"),
-  //     activeBatches, cycleCount,
-  //     totalMoney: ns.nFormat(totalMoney, "$0.0a")
-  //    }, null, 2))
-  // }
-
-  const report = () => {
-    let otherRam = otherServers.reduce((t, x) => t + x.maxRam, 0)
-    let otherWeakens = otherServers.reduce((t, x) => t + Math.trunc(x.maxRam / weakScriptRam), 0)
-    let hackPercent = ns.formulas.hacking.hackPercent(ns.getServer(target), ns.getPlayer())
-    let hackChance = ns.formulas.hacking.hackChance(ns.getServer(target), ns.getPlayer())
-    let maxMoney = ns.getServerMaxMoney(target)
-    let ramAvailable = ns.getServerMaxRam('home') + otherRam
-    let homeRamAvailable = ns.getServerMaxRam('home') - ns.getServerUsedRam('home') + otherWeakens * weakScriptRam
-    let batchRam = 24 * hackScriptRam  // one hacking slot has 12 hack threads
-        + weakScriptRam * 5 // and will require 5 weaken threads because 5 hacks take the time of one weaken
-        + (growScriptRam * 48) * 4 // and will require 96 grow threads, 24 for each hack and grows take 4x as long
-        + (weakScriptRam * 4) * 4 * 5/4 // and 10 more weaken threads, 8 for the grows and take 5/4 the time of a grow
-    let hackMoney = hackPercent * maxMoney * 24
-    // let hackingTimeMs = Math.trunc(3600000 - ns.getWeakenTime(target))
-    let hackingTimeMs = Math.trunc(3600000 - ns.getWeakenTime(target))
-    let activeBatches = Math.trunc(homeRamAvailable / batchRam)
-    let cycleCount = (hackingTimeMs - ns.getHackTime(target)) / ns.getHackTime(target)
-    let totalMoney = cycleCount * activeBatches * hackMoney * hackChance
-    ns.tprint(JSON.stringify({ otherRam, otherWeakens, hackPercent, hackChance,
-      maxMoney: ns.nFormat(maxMoney, "$0.0a"),
-      ramAvailable, homeRamAvailable,
-      batchRam, hackingTimeMs,
-      hackMoney: ns.nFormat(hackMoney, "$0.0a"),
-      activeBatches, cycleCount,
-      totalMoney: ns.nFormat(totalMoney, "$0.0a")
-     }, null, 2))
-  }
-
-  // report()
-  ns.exit()
 
   const copyScriptsToOtherServers = async () => {
     for (let i = 0; i < otherServers.length; i++) {
-      copyFilesToServer(otherServers[i].hostname)
+      await copyFilesToServer(otherServers[i].hostname)
     }
   }
-
   await copyScriptsToOtherServers()
 
+  /**
+   * Used to schedule weakens on other servers
+   */
   const findOtherServer = (ram) => {
     while (usableServers.length > 0 && usableServers[0].maxRam < weakScriptRam) {
       usableServers = usableServers.slice(1) 
@@ -382,7 +268,6 @@ export async function main(ns) {
     workers[id] = worker
     const scriptFile = `/remote/${command}.js`
     worker.pid = ns.exec(scriptFile, host, threads, target, id, command, PORT, execTime)
-    obj.started[obj.started.length] = worker
     if (!worker.pid) {
       EXIT(`could not exec() script`, {args: [scriptFile, host, threads, target, id, command, PORT], worker})  
     }
@@ -392,34 +277,30 @@ export async function main(ns) {
   ns.tprint(`Starting main loop at ${new Date().toLocaleTimeString()}`)
   ns.tprint(`    Expect results at ${new Date(new Date().valueOf() + ns.getWeakenTime(target)).toLocaleTimeString()}`)
 
+  // for scheduling weaken commands
   let nextWeak = new Date().valueOf()
-  let firstHack = true // for special processing running first hack before first weaken
 
-  // for debugging
-  const DEBUG = (str) => {
-    // ns.tprint(`${str}`)
-  }
+  // for special processing running first hack before first weaken
+  let firstHack = true 
 
   let lastGrowCreatedAt = 0
   let lastHackCreatedAt = 0
-  let expectedWeak = Math.ceil(ns.getWeakenTime(target) / WEAK_DELAY)
-  // method is weak, weak, grow, weak, weak, grow with hack in between
-  let possibleHacks = Math.ceil(ns.getHackTime(target) / (WEAK_DELAY  * 4))
 
+  // method is weak, weak, grow, weak, weak, grow with hack in between
+  let expectedWeak = Math.ceil(ns.getWeakenTime(target) / WEAK_DELAY) // how many weakens will be running
+  let possibleHacks = Math.ceil(ns.getHackTime(target) / (WEAK_DELAY  * 4)) // how many hacks can we possibly fit?
 
   //----------------------------------------------------------------------------------------------------
   // main loop
   //----------------------------------------------------------------------------------------------------
   while (true) {
+    // update information with messages from worker scripts
     processIncomingMessages()
 
     let ram = hostMaxRam - ns.getServerUsedRam(host)
-    if (ram < hackScriptRam * 12) {
-      EXIT('Not enough ram!  Tweak your settings...', {ram, hostMaxRam, hackScriptRam})
-    }
-    obj.stats = { time: new Date().toLocaleTimeString(), processing: processing.length, finished: obj.finished.length, hostMaxRam, ram, counts }
+    if (ram < hackScriptRam) EXIT('Not enough ram!  Tweak your settings...', {ram, hostMaxRam, hackScriptRam})
 
-    // schedule weakens every 50ms until we receive our first finish
+    // schedule weakens every WEAK_DELAY until we receive our first continue message from one
     if ((nextWeak != 0) && (new Date().valueOf() >= nextWeak)) {
       let duration = ns.getWeakenTime(target)
       let id = new Date().valueOf()
@@ -427,10 +308,9 @@ export async function main(ns) {
 
       // we can use other servers for weak
       let useHost = findOtherServer(weakScriptRam) || host
-      if (createWorker(useHost, 'weak', 1, id, duration, eEnd)) {
+      if (createWorker(useHost, 'weak', WEAK_THREADS, id, duration, eEnd)) {
         nextWeak += WEAK_DELAY
         await ns.sleep(10)
-        DEBUG(`Created weak ${id} ending ${eEnd}`)
         continue
       }
     }
@@ -438,15 +318,14 @@ export async function main(ns) {
     // schedule grows only when there are two weakens guaranteed before
     // it and two weakens guaranteed after it, and reserve ram for enough
     // hacks so that we have two grows per hack.  We can schedule 8 times
-    // as many grows (since we use two grow per hack) since hacks only
-    // last 1/4 as long
+    // as many grows since we use two grow per hack and since hacks only
+    // take 1/4 the time
     let missingHack = Math.max(possibleHacks - counts.hack, 0)
-    let missingHackRam = missingHack * hackScriptRam * 12
+    let missingHackRam = missingHack * hackScriptRam
     let missingWeak = Math.max(expectedWeak - counts.weak, 0)
     let missingWeakRam = missingWeak * weakScriptRam
-    let missingRam = missingHackRam + missingWeakRam + (RAM_SAFETY_FACTOR * hackScriptRam * 12)
-    obj.missing = { missingHack, missingHackRam, missingWeak, missingWeakRam, missingRam, ram, counts }
-    if (ram >  missingRam + growScriptRam * 12) {
+    let missingRam = missingHackRam + missingWeakRam + (RAM_SAFETY_FACTOR * hackScriptRam)
+    if (ram >  missingRam + growScriptRam) {
       let duration = ns.getGrowTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
@@ -456,19 +335,14 @@ export async function main(ns) {
       const nextTwoAreWeak = processing[index]?.command === 'weak' && processing[index + 1]?.command === 'weak'
       if (previousTwoAreWeak && nextTwoAreWeak && lastGrowCreatedAt < id - 20) {
         lastGrowCreatedAt = id
-        if (createWorker(host, 'grow', 12, id, duration, eEnd)) {
+        if (createWorker(host, 'grow', GROW_THREADS, id, duration, eEnd)) {
           await ns.sleep(10)
-          DEBUG(`Creating grow ${id} ending ${eEnd} (processing[0] at ${processing[0].eEnd})`)
-          DEBUG(`  Previous 10: ${processing.slice(index - 10, index).map(x => x.command).join(',')}`)
-          DEBUG(`  Next 10    : ${processing.slice(index, index + 10).map(x => x.command).join(',')}`)
           continue
-        } else {
-          DEBUG(`COULD NOT CREATE GROW()`)
         }
       }
     }
 
-    if (ram >= hackScriptRam * 12) {
+    if (ram >= hackScriptRam) {
       let duration = ns.getHackTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
@@ -478,16 +352,13 @@ export async function main(ns) {
       if (firstHack) {
         // on first hack we schedule within 200ms of first weaken
         if (processing.length > 0 && processing[0].eEnd - eEnd < 200 && processing[0].eEnd > eEnd) {
-          if (createWorker(host, 'hack', 12, id, duration, eEnd)) {
+          if (createWorker(host, 'hack', HACK_THREADS, id, duration, eEnd)) {
             firstHack = false
             await ns.sleep(10)
-            DEBUG(`Created FIRST hack ${id} ending ${eEnd} (processing[0] at ${processing[0].eEnd})`)
-            DEBUG(`  Next 5    : ${processing.slice(0, 5).map(x => x.command).join(',')}`)
             continue
           }
         }
       } else {
-        // ignore current for grow calculation if it is a grow
         // count previous grow until we reach beginning of list or another hack
         let pastGrows = 0
         for (let i = index - 1; i >= 0; i--) {
@@ -514,18 +385,15 @@ export async function main(ns) {
 
         if (previousIsWeak && nextIsWeak && pastGrows >= 2 && futureGrows >= 2 && lastHackCreatedAt < id - 20 ) {
           lastHackCreatedAt = id
-          if (createWorker(host, 'hack', 12, id, duration, eEnd)) {
+          if (createWorker(host, 'hack', HACK_THREADS, id, duration, eEnd)) {
             await ns.sleep(10)
-            // DEBUG(`Creating hack ${id} ending ${eEnd}`)
-            // DEBUG(`  Previous 10: ${processing.slice(index - 10, index).map(x => x.command).join(',')}`)
-            // DEBUG(`  Next 10    : ${processing.slice(index, index + 10).map(x => x.command).join(',')}`)
             continue
           }
         }
       }
     }
 
-    // didn't start anything, wait a little longer this time
+    // didn't start anything, delay 10ms
     await ns.sleep(10)
   }
 }

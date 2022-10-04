@@ -2,13 +2,13 @@
 export async function main(ns) {
   const obj = eval("window.obj") // 'CHEAT', but just for debugging
 
-  let [target, id, command, port] = ns.args
+  let [target, id, command, port, time] = ns.args
   port = port || 5
   const handle = ns.getPortHandle(port)
   const handle2 = ns.getPortHandle(port + 1)
 
   let start = new Date().valueOf()
-  let time = ns.getGrowTime(target)
+  // let time = ns.getGrowTime(target)
   let eEnd = start + time
 
   let msg = JSON.stringify({ id, message: 'start', command: 'grow', start, time, eEnd })

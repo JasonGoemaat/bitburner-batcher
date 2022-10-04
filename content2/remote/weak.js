@@ -2,7 +2,7 @@
 export async function main(ns) {
   const obj = eval("window.obj") // 'CHEAT', but just for debugging
 
-  let [target, id, command, port] = ns.args
+  let [target, id, command, port, time] = ns.args
   port = port || 5
   const handle = ns.getPortHandle(port)
   const handle2 = ns.getPortHandle(port + 1)
@@ -10,7 +10,7 @@ export async function main(ns) {
   // weakens are different, they run continuously so we loop
   let count = 0
   let start = new Date().valueOf()
-  let time = ns.getWeakenTime(target)
+  // let time = ns.getWeakenTime(target)
   let eEnd = start + time
   let end = null
   let result = null
@@ -26,7 +26,7 @@ export async function main(ns) {
 
     end = new Date().valueOf()
     start = end
-    time = ns.getWeakenTime(target)
+    // time = ns.getWeakenTime(target)
     eEnd = start + time
     count++
     msg = JSON.stringify({ id, message: 'continue', command: 'weak', start, time, eEnd, end, result, count })
