@@ -8,7 +8,7 @@ export async function main(ns) {
   // weakens are different, they run continuously so we loop
   let count = 0
   let start = new Date().valueOf()
-  let time = ns.getWeakenTime(target)
+  time = ns.getWeakenTime(target)
   let eEnd = start + time
   let end = null
   let result = null

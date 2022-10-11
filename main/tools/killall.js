@@ -1,28 +1,39 @@
 /** @param {NS} ns */
 export async function main(ns) {
-	const [command] = ns.args
-  
-  const servers = {}
+	let [command, hostArg] = ns.args
+  command = command ? `${command}` : null
 
-  const scanServer = (hostname) => {
-    const server = ns.getServer(hostname)
-    servers[hostname] = server
-    server.connections = ns.scan(hostname)
-    server.connections.forEach(name => {
-      if (!servers[name]) scanServer(name)
-    })
-  }
-  scanServer('home')
   /** @type {Server[]} */
-  let runnable = Object.values(servers).filter(x => x.hasAdminRights && x.maxRam > 0 && x.hostname !== 'home').concat(['home'])
+  let runnable = []
+  if (hostArg) {
+    runnable = [{ hostname: hostArg }]
+  } else {
+    const servers = {}
+    const scanServer = (hostname) => {
+      const server = ns.getServer(hostname)
+      servers[hostname] = server
+      server.connections = ns.scan(hostname)
+      server.connections.forEach(name => {
+        if (!servers[name]) scanServer(name)
+      })
+    }
+    scanServer('home')
+    runnable = Object.values(servers).filter(x => x.hasAdminRights && x.maxRam > 0 && x.hostname !== 'home').concat([{ hostname: 'home' }])
+  }
+
 	runnable.forEach(x => {
-		if (command) {
+		if (typeof(command) === 'string' && command.length > 0 && command !== 'all') {
 			var list = ns.ps(x.hostname)
+      let start = performance.now()
+      let count = 0
 			list.forEach(info => {
 				if (info.filename.indexOf(command) >= 0) {
-					ns.scriptKill(info.pid, x.hostname)
+          count++
+					ns.kill(info.pid, x.hostname)
 				}
 			})
+      let end = performance.now()
+      if (count) ns.tprint(`Killed ${count} scripts on ${x.hostname} in ${ns.nFormat(end - start, '0.000')} ms`)
 		} else {
 			ns.killall(x.hostname)
 		}

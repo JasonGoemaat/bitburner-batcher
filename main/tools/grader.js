@@ -8,7 +8,7 @@
 
 // --- CONFIG SECTION ---
 const testFile="/tools/batcher.js"; // File to run to initiate testing
-const testTimeLimit=1800000 + (248800); // Graded time, 30 min + 1/2 weaken time to compare with my hour run
+const testTimeLimit=3600000; // Graded time, 30 min + 1/2 weaken time to compare with my hour run
 const testFileArgs=['150,2,19,25']; // (not used for mine)
 const host = null;
 // --- END CONFIG SECTION ---

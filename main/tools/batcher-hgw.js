@@ -1,78 +1,77 @@
-/** TODO
- * 
- * 1. allow for wider batches and early cancels
- * 
- * What this would do would be schedule a the first grow/hack in a good spot that we can,
- * however if we can later schedule one to finish closer to and within XXX ms of the next command,
- * cancel the first and replace it with the second.  Maybe make that 30ms.   I need to find out
- * how fast it is to exec a script and kill an old one.  Maybe we can do it multiple times.
- * Also maybe we just add it to a list and do the kills when we know we aren't at minimum
- * difficulty?  Or if there are at least a certain amount, like 5?  We need some padding in our
- * memory then to allow for those extra possibly 8 (4 hack and 4 grow) waiting to be killed.
- * 
- * 2. Fix weaken time decreasing
- * 
- * The weaken scripts currently take the time as an argument, but that can lower as we gain levels,
- * so even if it is always min difficulty the time would be off.  For now I can get the time
- * in the script again so it will report accurate end times.  Mabye in the future if I can
- * guarantee the weakens will be at min difficulty, I can write it to a file that the weaken
- * threads can read for free!
- */
+const GROWTH_FUDGE_FACTOR = 0.99 // Must recover this much of a hack
 
-// const WEAK_DELAY = 60
-// const WEAK_THREADS = 4
-// const GROW_THREADS = 57
-// const HACK_THREADS = 50
-// const PORT = 5
-// const RAM_SAFETY_FACTOR = 4 // save room for 4 extra hacks when scheduling grows
-// const target = 'omega-net'
-// const host = 'huge'
+import { createTable, getCustomFormulas } from "/lib"
 
-const WEAK_DELAY = 100 // 108
-const WEAK_THREADS = 25
-const GROW_THREADS = 129
-const HACK_THREADS = 310
-const PORT = 5
-const RAM_SAFETY_FACTOR = 4 // save room for 4 extra hacks when scheduling grows
-const target = 'rho-construction'
-const host = 'peta'
-
-/**
- * @typedef Worker
- * @type {object}
- * @property {number} id - ID - Time when exec() was called - set by worker script from argument
- * @property {string} command - one of 'weak', 'grow', 'hack' - set by worker script
- * @property {number} start - Actual time when last command was started - set by worker script
- * @property {number} time - Estimaged duration - set by worker script
- * @property {number} eEnd - Estimated end time of finish - set by worker script
- * @property {number} end - Actual time when command ends - set by worker script
- * @property {number} result - Actual result of call - set by worker script
- * @property {number} execStart - Expected start time at the point exec() is called
- * @property {number} execEnd - Expected end time at the point exec() is called
- * @property {number} execTime - Expected duration at the point exec() is called
- */
-
-/**
- * @typedef Counts
- * @type {object}
- * @property {number} weak - how many weak are currently executing
- * @property {number} grow - how many grow are currently executing
- * @property {number} hack - how many hack are currently executing
- */
+const hacking = getCustomFormulas()
 
 /** @param {NS} ns */
 export async function main(ns) {
-  // ports used for scripts reporting start and end information
-  const handle = ns.getPortHandle(PORT); handle.clear()
-  const handle2 = ns.getPortHandle(PORT + 1); handle2.clear()
+  if (ns.args.length < 2) {
+    const lines = [
+      `Usage: run ${ns.getScriptName()} <host> <target> [command] [growPort] [hackPort]`,
+      `  <host>    - scripting host with lots of ram`,
+      `  <target>  - target computer, or 'all' which will pick`,
+      `  command - optional, defaults to 'run'`,
+      `      run     - default if not specified, runs batcher`,
+      `      analyze - analyze server(s) and report as a table`,
+      `  port - port to use for communication (default 5)`,
+    ]
+    ns.tprint('\n' + lines.join('\n'))
+    return
+  }
+  
+  let [host, target, command, port] = ns.args
+  ns.tprint(JSON.stringify({host, target, command, port}))
+  port = port || 5
+
+  // get host information
+  let hostServer = ns.getServer(host)
+  let ram = (command === 'analyze') ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed // use all ram when anlyzing only
+  let cores = hostServer.cpuCores
+
+  let server = ns.getServer(target)
+  let player = ns.getPlayer()
+  player.skills.hacking = 911
+  let calc = calculateHGW(server, player, ram, cores = 1, ns)
+  calc.sort((a, b) => b.referenceProfit - a.referenceProfit)
+  calc = calc.slice(0, 10)
+  let table = createTable(calc.map(x => ({
+    ht: x.ht,
+    gt: x.gt,
+    wt: x.wt,
+    hp: ns.nFormat(x.hp, '0.00%'),
+    gp: ns.nFormat(x.gp, '0.00%'),
+    hm: ns.nFormat(x.hm, '$0,000.0a'),
+    gm: ns.nFormat(x.gm, '$0,000.0a'),
+    batchRam: ns.nFormat(x.batchRam, '0,000.0') + 'GB',
+    profit: ns.nFormat(x.profit, '$0,000.00a') + '/GB',
+    perHour: ns.nFormat(x.profitPerHour, '$0,000.00a'),
+    reference: ns.nFormat(x.referenceProfit, '$0,000.00a'),
+    delay: ns.nFormat(x.batchDelay, '0,000'),
+    htime: ns.nFormat(x.hackTime, '0,000'),
+    batches: ns.nFormat(x.concurrentBatches, '0,000.0'),
+    // hackTime, batchesPerHour, profitPerHour, batchDelay, referenceProfit
+  })))
+  
+  ns.tprint('Results:\n' + table.join('\n'))
+  return
+
+  // perform calculations and analyze server(s)
+  const calculations = (target === 'all' ? analyzeAllServers(ns, ram, cores) : [analyzeServer(ns, ram, target, cores)])
+  calculations.sort((a, b) => (b.profitPerHour || 0) - (a.profitPerHour || 0)) // highest profit first
+  
+  // if analyzing, report as a table and return
+  if (command === 'analyze') {
+    report(ns, calculations)
+    return
+  }
 
   var obj = eval("window['obj'] = window['obj'] || {}")
   obj.errors = []
   obj.nonstop = []
 
   // disable logs
-  var logsToDisable = ['sleep', 'exec', 'getServerUsedRam', 'getServerMaxRam', 'scp']
-  logsToDisable.forEach(name => ns.disableLog(name))
+  ns.disableLog('ALL')
 
   /**
    * Object containing all active workers, key is exec time.
@@ -127,9 +126,9 @@ export async function main(ns) {
     return min;
   }
 
-  const growScriptRam = ns.getScriptRam('/remote/grow.js') * GROW_THREADS
-  const hackScriptRam = ns.getScriptRam('/remote/hack.js') * HACK_THREADS
-  const weakScriptRam = ns.getScriptRam('/remote/weak.js') * WEAK_THREADS
+  const growScriptThreadRam = 1.75
+  const hackScriptThreadRam = 1.7
+  const weakScriptThreadRam = 1.75
 
   /**
    * How many scripts are currently executing, used to calculate ram usage
@@ -483,3 +482,243 @@ export async function main(ns) {
     await ns.sleep(10)
   }
 }
+
+/**
+ * @typedef Worker
+ * @type {object}
+ * @property {number} id - ID - Time when exec() was called - set by worker script from argument
+ * @property {string} command - one of 'weak', 'grow', 'hack' - set by worker script
+ * @property {number} start - Actual time when last command was started - set by worker script
+ * @property {number} time - Estimaged duration - set by worker script
+ * @property {number} eEnd - Estimated end time of finish - set by worker script
+ * @property {number} end - Actual time when command ends - set by worker script
+ * @property {number} result - Actual result of call - set by worker script
+ * @property {number} execStart - Expected start time at the point exec() is called
+ * @property {number} execEnd - Expected end time at the point exec() is called
+ * @property {number} execTime - Expected duration at the point exec() is called
+ */
+
+/**
+ * @typedef Counts
+ * @type {object}
+ * @property {number} weak - how many weak are currently executing
+ * @property {number} grow - how many grow are currently executing
+ * @property {number} hack - how many hack are currently executing
+ */
+
+
+function analyzeServer(ns, ram, hostname, cores = 1) {
+  let player = ns.getPlayer()
+  try {
+    let server = ns.getServer(hostname)
+    let values = calculateForServer(ns, server, player, ram, cores)
+    if (values) {
+      return values
+    } 
+    return { hostname } // ERROR
+  } catch (err) {
+    ns.tprint(`ERROR!  ${err} with ${hostname}`)
+    return { hostname } 
+  }
+}
+
+function analyzeAllServers(ns, ram, cores) {
+  const player = ns.getPlayer()
+  const servers = {}
+  const scanServer = (hostname) => {
+    const server = ns.getServer(hostname)
+    servers[hostname] = server
+    server.connections = ns.scan(hostname)
+    server.connections.forEach(name => {
+      if (!servers[name]) scanServer(name)
+    })
+  }
+  scanServer('home')
+  /** @type {Server[]} */
+  let list = Object.values(servers)
+  list = list.filter(x => !x.purchasedByPlayer && x.hostname !== 'home' && x.moneyMax > 0 && x.requiredHackingSkill < player.skills.hacking && x.hasAdminRights)
+  // list = list.slice(0, 2)
+  ns.tprint(`INFO: Calculating for ${list.length} servers`)
+  let results = list.map(x => analyzeServer(ns, ram, x.hostname, cores)).filter(x => x)
+  ns.tprint(`INFO: Have ${results.length} results`)
+  return results
+}
+
+/**
+ * Calculate profits and best values to use for a given server,
+ * player, and available ram.
+ * 
+ * @param {Server} server
+ * @param {Player} player
+ * @param {number} ram - gb available
+ */
+ function calculateForServer(ns, server, player, ram, cores = 1) {
+  let prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
+  let last = null
+  for (let i = 1; i < 1000; i++) {
+    // ns.tprint(`calculating for ${i} weaken threads`)
+    let calculated = calculateForWeakenThreads(ns, server, player, ram, i, cores)
+    if (!calculated) break;
+    last = calculated
+    
+    // target first option with delay betweek weakens of 80ms or more
+    if (calculated && calculated.delayWeakens >= 80) return calculated
+  }
+  ns.tprint(`could not find valid with delayWeakens >= 80 for ${server.hostname}`)
+  return last
+}
+
+/**
+ * Solve how many grow threads are needed
+ */
+function solveGrow(moneyMax, moneyAvailable, growPercent) {
+  // naive
+  let neededPercent = moneyAvailable / (moneyMax - moneyAvailable)
+  let neededThreads = neededPercent / growPercent
+
+  // calculated, if growPercent is .numCycleForGrowth
+
+
+}
+
+/**
+ * Calculate optimal 'batch' parameters for a server and player given 
+ * given an amount of ram and number of cores (default 1)
+ * 
+ * @param {Server} server
+ * @param {Player} player
+ * @param {number} ram - gb available
+ * @param {number} cores - cores (default 1)
+ */
+function calculateHGW(server, player, ram, cores = 1, ns) {
+  // percent hacking with one thread
+  let prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
+  let hackPercentOneThread = hacking.hackPercent(server, player)
+  let maxHacks = Math.trunc(0.95 / hackPercentOneThread)
+  // ns.tprint('maxHacks: ' + ns.nFormat(maxHacks, '0,000')) // 144 for rho-construction
+
+  let list = []
+  for (let ht = maxHacks; ht >= 1; ht--) {
+    let hp = hackPercentOneThread * ht
+    let hm = prepped.moneyMax * hp
+    let hacked = {...prepped, hackDifficulty: prepped.minDifficulty + ht * 0.002, moneyAvailable: prepped.moneyMax - hm}
+    let growPercentOneThread = hacking.growPercent(hacked, 1, player, cores) - 1
+    let growPercentNeeded = hm / hacked.moneyAvailable
+    let gt = Math.ceil(growPercentNeeded / growPercentOneThread)
+    let gp = hacking.growPercent(hacked, gt, player, cores) - 1
+    let gm = hacked.moneyAvailable * gp
+    while (gm >= hm && gt > 0) {
+      gt = gt - 1
+      gp = hacking.growPercent(hacked, gt, player, cores) - 1
+      gm = hacked.moneyAvailable * gp
+    }
+    gt += 1
+    gp = hacking.growPercent(hacked, gt, player, cores) - 1
+    gm = hacked.moneyAvailable * gp
+
+    let wt = Math.ceil((gt * 0.004 + ht * 0.002) / 0.050)
+    // ns.tprint(JSON.stringify({ht, hp: ns.nFormat(hp, '0.00000'), gt, gp: ns.nFormat(gp, '0.00000'), wt}))
+
+    let batchRam = ht * 1.7 + gt * 4 * 1.75 + wt * 5 * 1.75
+    let profit = hm / batchRam
+    let concurrentBatches = Math.trunc(ram / batchRam) - 1
+    let hackTime = hacking.hackTime(server, player)
+    let batchesPerHour = 3600000/hackTime*concurrentBatches
+    let profitPerHour = batchesPerHour * hm
+    let batchDelay = hackTime / concurrentBatches
+    let referenceProfit = profitPerHour * (3600000 - (hackTime * 5))/3600000
+    list.push({ ht, gt, wt, hp, gp, hm, gm, batchRam, profit, hackTime,
+      batchesPerHour, profitPerHour, batchDelay, referenceProfit, concurrentBatches })
+  }
+  return list
+}
+
+/*
+How does this work out to 7.67t per hour, 7.12t for reference?
+
+10 hack, 30 grow, 3 weaken, $884.5m profit, 253.3gb, 406 delay, 52s hackTime
+works out to 128 concurrent batches, 32,422.4 gb
+Profit shows $7.56t/hr, $7.12t with reference warm-up, 10 hack, 30 grow, 3 weaken
+Manual verification - 128 concurrent batches, delay 406ms:
+  Active hack threads: 10 * 128 = 1280 * 1.7 = 2176gb
+  Active grow threads: 30 * 128 * 4 * 1.75 = 26880gb
+  Active weaken threads: 3 * 128 * 5 * 1.75 = 3360gb
+
+
+  // if grow percent is .25, hack percent can be at most .20, i.e. 100*0.20 = 80
+  // and 80*1.25 = 100.  So g$ = h$ equates to:
+  //  hack percent is 0.20, remaining percent is 0.80, grow percent is hack percent / remaining percent or 0.25
+  //  hack percent is 0.50, remaining percent is 0.50, grow percent is hack percent / remaining percent or 1.00
+  //  hack percent is 0.10, remaining percent is 0.90, grow percent is hack percent / remaining percent or .11111
+  //  so starting with grow percent, hp = gp * (1-hp))
+  //     or gp = hp/(1-hp)
+  //  Starting with gp, rp is 1/(1+gp), and hp is 1-rp, so hp is 1-(1/(1+gp))
+  let possibleHackPercent = 1-(1/(1+growPercent))
+  let hackThreads = Math.trunc(possibleHackPercent / HP)
+  if (weakenThreads * 25 < hackThreads) { // too many hack threads?!?  upside-down server growth
+    // use gp = hp/(1-hp)
+    hackThreads = weakenThreads * 25
+    hackPercent = hackThreads  * hacking.hackPercent(server, player)
+    growThreads = Math.ceil(hackPercent / GP)
+    growPercent = GP * growThreads
+  }
+
+  if (weakenThreads * 25 < hackThreads || Math.trunc(weakenThreads * 12.5) > growThreads) {
+    // ERROR!   I don't think this should happen, but whatever
+    // ns.tprint(`Could not find a thread count for ${server.hostname}!`)
+    return null
+  }
+
+  let weakenTime = hacking.weakenTime(server, player)
+  let growTime = hacking.growTime(server, player)
+  let hackTime = hacking.hackTime(server, player)
+  let hackChance = hacking.hackChance(server, player)
+  let hackExp = hacking.hackExp(server, player)
+
+  let ramUseForOneBatchPerHackTime = 
+      hackThreads * 1.7 +
+      growThreads * 4 * 1.75 * extraGrowFactor + // running 4x as many grows
+      weakenThreads * 5 * 1.75 * extraWeakenFactor + // running 5x as many as hacks plus fudge factor
+      weakenThreads * 4 * extraGrowFactor * 5/4 * 1.75 * extraWeakenFactor // running for eactra 4*extraGrowFactor grows and taking 5/4 the time
+
+  let hackScriptsPerHackTime = Math.trunc(ram / ramUseForOneBatchPerHackTime)
+  let growScriptsPerGrowTime = hackScriptsPerHackTime * 4 * extraGrowFactor
+  let weakenScriptsPerWeakenTime = (hackScriptsPerHackTime * 5 + growScriptsPerGrowTime * 5/4) * extraWeakenFactor
+
+  let successfulHackMoney = hackPercent * server.moneyMax
+  let expectedHackMoney = successfulHackMoney * hackChance
+  let profitPerHour = expectedHackMoney * hackScriptsPerHackTime * 3600000 / hackTime
+  let expectedExpForHacksPerHackScript = hackExp * (hackChance + ((1-hackChance)/4)) * hackThreads
+  let expectedExpForGrowsPerGrowScript = hackExp * growThreads
+  let expectedExpForWeakensPerWeakenScript = hackExp * weakenThreads
+  let expPerHour = (expectedExpForHacksPerHackScript * hackScriptsPerHackTime * 3600000 / hackTime) +
+      (expectedExpForGrowsPerGrowScript * growScriptsPerGrowTime * 3600000 / growTime) +
+      (expectedExpForWeakensPerWeakenScript * weakenScriptsPerWeakenTime * 3600000 / weakenTime);
+
+  // now detailed instructions for ramping up
+  let startHacks = weakenTime * 4/5
+  let delayHacks = hackTime / hackScriptsPerHackTime
+  let startGrows = weakenTime * 1/5
+  let delayGrows = growTime / growScriptsPerGrowTime
+  let startWeakens = 0
+  let delayWeakens = weakenTime / weakenScriptsPerWeakenTime
+
+  let calculatedRam = Math.trunc(hackTime / delayHacks) * 1.7 * hackThreads +
+    Math.trunc(growTime / delayGrows) * 1.75 * growThreads +
+    Math.trunc(weakenTime / delayWeakens) * 1.75 * weakenThreads 
+  
+  return {
+    profitPerHour, weakenTime, growTime, hackTime,
+    weakenThreads, hackThreads, growThreads,
+    startHacks, delayHacks, startGrows, delayGrows, startWeakens, delayWeakens,
+    successfulHackMoney, expectedHackMoney, extraWeakenFactor, extraGrowFactor,
+    hackChance, hackExp, expPerHour,
+    hostname: server.hostname,
+    moneyMax: server.moneyMax,
+    minDifficulty: server.minDifficulty,
+    requiredHackingSkill: server.requiredHackingSkill,
+    hackPercent, growPercent, hackScriptsPerHackTime,
+    calculatedRam, usableRam: ram
+  }
+}
+*/

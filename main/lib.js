@@ -71,9 +71,9 @@ export function createTable(objects, options) {
         value = value + ''.padEnd(maxLengths[key] - valueLength, ' ')
       } else if (options.align && options.align[key] === 'center') {
         let totalDiff = maxLengths[key] - valueLength
-        let startDiff = totalDiff / 2
+        let startDiff = Math.trunc(totalDiff / 2)
         let endDiff = totalDiff - startDiff
-        ''.padStart(startDiff, ' ') + value + ''.padEnd(endDiff, ' ')
+        value = ''.padStart(startDiff, ' ') + value + ''.padEnd(endDiff, ' ')
       } else {
         value = ''.padStart(maxLengths[key] - valueLength, ' ') + value
       }
@@ -301,6 +301,36 @@ function calculateIntelligenceBonus(intelligence, weight = 1) {
   return 1 + (weight * Math.pow(intelligence, 0.8)) / 600;
 }
 
+
+/**
+ * Returns the number of "growth cycles" needed to grow the specified server by the
+ * specified amount.
+ * @param {Server} server - Server being grown
+ * @param {number} growth - How much the server is being grown by, in DECIMAL form (e.g. 1.5 rather than 50)
+ * @param {Player} p - Reference to Player object
+ * @returns {number} Number of "growth cycles" needed
+ */
+ export function numCycleForGrowth(server, growth, p, cores = 1) {
+  let ajdGrowthRate = 1 + (CONSTANTS.ServerBaseGrowthRate - 1) / server.hackDifficulty;
+  if (ajdGrowthRate > CONSTANTS.ServerMaxGrowthRate) {
+    ajdGrowthRate = CONSTANTS.ServerMaxGrowthRate;
+  }
+
+  const serverGrowthPercentage = server.serverGrowth / 100;
+
+  const coreBonus = 1 + (cores - 1) / 16;
+  const cycles =
+    Math.log(growth) /
+    (Math.log(ajdGrowthRate) *
+      p.mults.hacking_grow *
+      serverGrowthPercentage *
+      //BitNodeMultipliers.ServerGrowthRate *
+      getBNMServerGrowthRate(p) *
+      coreBonus);
+
+  return cycles;
+}
+
 /**
  * Returns the chance the player has to successfully hack a server
  */
@@ -424,14 +454,17 @@ function calculateWeakenTime(server, player) {
   return weakenTimeMultiplier * calculateHackingTime(server, player);
 }
 
+/**
+ * @param {Server} server
+ */
 function calculateServerGrowth(server, threads, player, cores = 1) {
   const numServerGrowthCycles = Math.max(Math.floor(threads), 0);
 
   //Get adjusted growth rate, which accounts for server security
-  const growthRate = CONSTANTS.ServerBaseGrowthRate;
+  const growthRate = CONSTANTS.ServerBaseGrowthRate; // 1.03
   let adjGrowthRate = 1 + (growthRate - 1) / server.hackDifficulty;
   if (adjGrowthRate > CONSTANTS.ServerMaxGrowthRate) {
-    adjGrowthRate = CONSTANTS.ServerMaxGrowthRate;
+    adjGrowthRate = CONSTANTS.ServerMaxGrowthRate; // capped at 1.0035
   }
 
   //Calculate adjusted server growth rate based on parameters
@@ -477,6 +510,15 @@ const mine = {
    * @param {Player} player
    */
   weakenTime: (server, player) => calculateWeakenTime(server, player) * 1000,
+  /**
+   * Returns the number of "growth cycles" needed to grow the specified server by the
+   * specified amount.
+   * @param {Server} server - Server being grown
+   * @param {number} growth - How much the server is being grown by, in DECIMAL form (e.g. 1.5 rather than 50)
+   * @param {Player} player - Reference to Player object
+   * @returns {number} Number of "growth cycles" needed
+   */
+  numCycleForGrowth: (server, growth, player, cores = 1) => numCycleForGrowth(server, growth, player, cores = 1),
 }
 
 export function checkFormulasExe(ns) {
