@@ -1,3 +1,16 @@
+/**
+ * 1.7t in 1320 or 4.7t/h (6.2t/h max)
+ * 2.4t in 1800s or 4.9t/h (6.0t/h max)
+ * available ram hovering around 7200gb, I'm missing about 20%
+ * 4.3t in 3001s or 5.1t/h (5.8t/h max)
+ 
+/tools/grader-hgw.js: Finished testing after 1:00:00. Money increased by $5.20t, effective profit is $86.70b/min
+/tools/batcher-hgw.js: {"availableRam":7251.9000000000015,"hostMaxRam":32768,"expectedWeak":748,"possibleHacks":187}
+/tools/batcher-hgw.js: kills: {"weak":0,"grow":40747,"hack":35205}/h max), counts: {"weak":749,"grow":600,"hack":187}
+/tools/batcher-hgw.js: $5.2t in 3,601s or $5.2t/h ($5.7t/h max)
+
+ */
+
 const GROWTH_FUDGE_FACTOR = 0.99 // Must recover this much of a hack
 
 import { createTable, getCustomFormulas } from "/lib"
@@ -6,7 +19,7 @@ const hacking = getCustomFormulas()
 
 /** @param {NS} ns */
 export async function main(ns) {
-  if (ns.args.length < 2) {
+  if (ns.args[0] === '--help' || ns.args[0] === '-h') {
     const lines = [
       `Usage: run ${ns.getScriptName()} <host> <target> [command] [growPort] [hackPort]`,
       `  <host>    - scripting host with lots of ram`,
@@ -14,51 +27,27 @@ export async function main(ns) {
       `  command - optional, defaults to 'run'`,
       `      run     - default if not specified, runs batcher`,
       `      analyze - analyze server(s) and report as a table`,
-      `  port - port to use for communication (default 5)`,
+      `  port - first port to use for communication (default 5), uses port+1 and port+2 also`,
     ]
     ns.tprint('\n' + lines.join('\n'))
     return
   }
   
   let [host, target, command, port] = ns.args
-  ns.tprint(JSON.stringify({host, target, command, port}))
+  // ns.tprint(JSON.stringify({host, target, command, port}))
   port = port || 5
 
   // get host information
+  host = host || ns.getHostname()
   let hostServer = ns.getServer(host)
   let ram = (command === 'analyze') ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed // use all ram when anlyzing only
   let cores = hostServer.cpuCores
-
-  let server = ns.getServer(target)
-  let player = ns.getPlayer()
-  player.skills.hacking = 911
-  let calc = calculateHGW(server, player, ram, cores = 1, ns)
-  calc.sort((a, b) => b.referenceProfit - a.referenceProfit)
-  calc = calc.slice(0, 10)
-  let table = createTable(calc.map(x => ({
-    ht: x.ht,
-    gt: x.gt,
-    wt: x.wt,
-    hp: ns.nFormat(x.hp, '0.00%'),
-    gp: ns.nFormat(x.gp, '0.00%'),
-    hm: ns.nFormat(x.hm, '$0,000.0a'),
-    gm: ns.nFormat(x.gm, '$0,000.0a'),
-    batchRam: ns.nFormat(x.batchRam, '0,000.0') + 'GB',
-    profit: ns.nFormat(x.profit, '$0,000.00a') + '/GB',
-    perHour: ns.nFormat(x.profitPerHour, '$0,000.00a'),
-    reference: ns.nFormat(x.referenceProfit, '$0,000.00a'),
-    delay: ns.nFormat(x.batchDelay, '0,000'),
-    htime: ns.nFormat(x.hackTime, '0,000'),
-    batches: ns.nFormat(x.concurrentBatches, '0,000.0'),
-    // hackTime, batchesPerHour, profitPerHour, batchDelay, referenceProfit
-  })))
-  
-  ns.tprint('Results:\n' + table.join('\n'))
-  return
+  ns.tprint(`WARNING: host is ${host}`)
 
   // perform calculations and analyze server(s)
-  const calculations = (target === 'all' ? analyzeAllServers(ns, ram, cores) : [analyzeServer(ns, ram, target, cores)])
-  calculations.sort((a, b) => (b.profitPerHour || 0) - (a.profitPerHour || 0)) // highest profit first
+  const calculations = (target === 'all' || !target ? analyzeAllServers(ns, ram, cores) : [analyzeServer(ns, ram, target, cores)])
+  //ns.tprint('calculations: ' + JSON.stringify(calculations))
+  calculations.sort((a, b) => (b.profit || 0) - (a.profit || 0)) // highest profit first
   
   // if analyzing, report as a table and return
   if (command === 'analyze') {
@@ -66,18 +55,52 @@ export async function main(ns) {
     return
   }
 
+  // disable logs
+  ns.disableLog('ALL')
+
+  console.log('calculations: ', calculations);
+
   var obj = eval("window['obj'] = window['obj'] || {}")
   obj.errors = []
   obj.nonstop = []
+  let batcher = {}
+  obj.batcher = batcher
+  batcher.calculations = calculations[0]
+  target = batcher.calculations.hostname
+  batcher.args = ns.args
+  batcher.host = host
+  batcher.target = target
+  batcher.command = command
+  batcher.port = port
+  batcher.hResults = ns.getPortHandle(port)
+  batcher.hResults2 = ns.getPortHandle(port + 1)
+  batcher.hWeakenTime = ns.getPortHandle(port + 2)
+  batcher.player = ns.getPlayer()
+  batcher.server = ns.getServer(batcher.target)
+  batcher.hackTimeUpdates = []
 
-  // disable logs
-  ns.disableLog('ALL')
+  batcher.hResults.clear()
+  batcher.hResults2.clear()
+  batcher.hWeakenTime.clear()
+  batcher.ram = ram
+  batcher.cores = cores
+
+  report(ns, [batcher.calculations])
+
 
   /**
    * Object containing all active workers, key is exec time.
    * @type {Object<string,Worker}
    */
-  let workers = {}
+  batcher.workers = {}
+  
+  /**
+   * Object containing created hacks and grows we haven't received a start
+   * message for.  When we get the start message and the worker ending
+   * immediately before is the same type, kill it.
+   * @type {Object<string,Worker}
+   */
+   batcher.checkWorkers = {}
 
   /**
    * Array of workers, populated after start/continue message is received from
@@ -86,8 +109,10 @@ export async function main(ns) {
    *
    * @type {Worker[]}
    */
-   let processing = []
-   let totalProfit = 0
+   batcher.processing = []
+   batcher.totalProfit = 0
+   batcher.hackSuccess = 0
+   batcher.hackFail = 0
 
   /**
    * Function to compare workers using eEnd and then id, used to keep
@@ -97,7 +122,7 @@ export async function main(ns) {
    * @param {Worker} worker1
    * @param {Worker} worker2
    */
-   const compareWorkers = (worker1, worker2) => {
+  const compareWorkers = (worker1, worker2) => {
     if (!worker2) return -1 // this is 'less' than no worker, for bsearch insert
     if (worker1.eEnd > worker2.eEnd) return 1
     if (worker1.eEnd < worker2.eEnd) return -1
@@ -105,6 +130,7 @@ export async function main(ns) {
     if (worker1.id < worker2.id) return -1
     return 0
   }
+  batcher.compareWorkers = compareWorkers
 
   /**
    * Use binary search to quickly find worker or location to insert a new worker
@@ -113,10 +139,10 @@ export async function main(ns) {
    * @param {Worker} worker
    */
   const findProcessing = (worker) => {
-    let min = 0, max = processing.length - 1
+    let min = 0, max = batcher.processing.length - 1
     while (min <= max) {
       let index = Math.trunc((min + max) / 2)
-      let test = compareWorkers(worker, processing[index])
+      let test = batcher.compareWorkers(worker, batcher.processing[index])
       if (test > 0) {
         min = index + 1
       } else {
@@ -125,10 +151,7 @@ export async function main(ns) {
     }
     return min;
   }
-
-  const growScriptThreadRam = 1.75
-  const hackScriptThreadRam = 1.7
-  const weakScriptThreadRam = 1.75
+  batcher.findProcessing = findProcessing
 
   /**
    * How many scripts are currently executing, used to calculate ram usage
@@ -136,11 +159,12 @@ export async function main(ns) {
    * 
    * @type {Counts}
    */
-   const counts = {
+  const counts = {
     weak: 0,
     grow: 0,
     hack: 0
   }
+  batcher.counts = counts
 
   /**
    * How many total executions we've had since start
@@ -152,15 +176,19 @@ export async function main(ns) {
     grow: 0,
     hack: 0
   }
+  batcher.executions = executions
 
-  // ensure hosts have the most recent scripts
-  const copyFilesToServer = async (hostname) => {
-    ns.print(`Copying files to host ${hostname}`)
-    await ns.scp(['/remote/weak.js', '/remote/grow.js', '/remote/hack.js'], hostname)
+  /**
+   * How many total times we've killed these commands
+   * 
+   * @type {Counts}
+   */
+   const kills = {
+    weak: 0,
+    grow: 0,
+    hack: 0
   }
-  if (host !== 'home') {
-    await copyFilesToServer(host)
-  }
+  batcher.kills = kills
 
   // make sure server has been prepped, in a real script we might do this automatically
   ns.print(`Ensuring server ${target} is ready`)
@@ -175,11 +203,12 @@ export async function main(ns) {
   ensureServerIsReady(target)
 
   // used to calculate ram available
-  const hostMaxRam = ns.getServerMaxRam(host)
+  batcher.hostMaxRam = ns.getServerMaxRam(host)
 
   // if we have an error, kill all scripts on all servers and exit
   const EXIT = (message, errorObject) => {
     ns.tprint(`ERROR: ${message}`)
+    ns.tprint(`INFO: ` + JSON.stringify(errorObject, null, 2))
     otherServers.forEach(x => ns.killall(x.hostname))
     ns.killall()
     ns.exit()
@@ -190,11 +219,11 @@ export async function main(ns) {
    */
   const processIncomingMessages = () => {
     let messages = []
-    while (!handle.empty()) {
-      messages[messages.length] = JSON.parse(handle.read())
+    while (!batcher.hResults.empty()) {
+      messages[messages.length] = JSON.parse(batcher.hResults.read())
     }
-    while (!handle2.empty()) {
-      messages[messages.length] = JSON.parse(handle2.read())
+    while (!batcher.hResults2.empty()) {
+      messages[messages.length] = JSON.parse(batcher.hResults2.read())
     }
     if (messages.length === 0) return
 
@@ -207,56 +236,68 @@ export async function main(ns) {
 
     messages.forEach(msg => {
       let { message, id, command, start, time, eEnd, end, result}  = msg
-      let worker = workers[id]
-      if (!worker) EXIT(`Got message for unknown worker ${id}`, {msg, workers})
+      let worker = batcher.workers[id]
+      if (!worker) EXIT(`Got message for unknown worker ${id}`, {msg, workers: batcher.workers})
 
       // ------------------------------ start message ------------------------------
       // { id, message: 'start', command: 'weak', start, time, eEnd }
       // Worker has actually started and called the method, add to the right spot
       // in processing[] and update with a more accurate 'eEnd' expected end time.
       if (message === 'start') {
-        let index = findProcessing({ id, eEnd })
-        if (compareWorkers({ id, eEnd }, processing[index]) === 0)  EXIT('got start message for worker already in array!', { msg, processing, workers })
+        let index = batcher.findProcessing({ id, eEnd })
+        if (batcher.compareWorkers({ id, eEnd }, batcher.processing[index]) === 0)  EXIT('got start message for worker already in array!', { msg, processing: batcher.processing, workers: batcher.workers })
 
         // update worker with accurate info and insert into array at the right spot
         Object.assign(worker, { start, time, eEnd })
-        processing = processing.slice(0, index).concat([worker]).concat(processing.slice(index))
-        counts[command]++
+        batcher.processing = batcher.processing.slice(0, index).concat([worker]).concat(batcher.processing.slice(index))
+        batcher.counts[command]++
+
+        // check if previous command is the same, and kill it if so
+        /** @type {Worker} */
+        let previous = batcher.processing[index - 1]
+        if (worker.command !== 'weak' && previous && previous.command === worker.command) {
+          ns.kill(previous.pid, previous.host)
+          delete batcher.workers[previous.id]
+          batcher.counts[previous.command]--
+          batcher.kills[previous.command]++
+          batcher.processing = batcher.processing.slice(0, index - 1).concat(batcher.processing.slice(index))
+        }
       } else if (message === 'continue') {
         // { id, message: 'continue', command: 'weak', start, time, eEnd, end, result }
         // this is for end and restart of 'weak' commands that are running continuously,
         // with end time and result from previous run and new eEnd and start times
         // for the new run
         
-        // the first time we get a continue, disable scheduling new weak commands
-        nextWeak = 0
+        batcher.nextWeak = 0
 
         // remove previous run from processing[]
-        let oldIndex = findProcessing(worker)
-        processing = processing.slice(0, oldIndex).concat(processing.slice(oldIndex + 1))
+        let oldIndex = batcher.findProcessing(worker)
+        batcher.processing = batcher.processing.slice(0, oldIndex).concat(batcher.processing.slice(oldIndex + 1))
 
         // update worker and insert into new position in processing[] with new eEnd
         Object.assign(worker, { start, time, eEnd, end: null, result: null })
-        let newIndex = findProcessing(worker)
-        processing = processing.slice(0, newIndex).concat([worker]).concat(processing.slice(newIndex))
-        executions[command]++
+        let newIndex = batcher.findProcessing(worker)
+        batcher.processing = batcher.processing.slice(0, newIndex).concat([worker]).concat(batcher.processing.slice(newIndex))
+        batcher.executions[command]++
       } else if (message === 'end') {
         // ------------------------------ end message ------------------------------
         // { id, message: 'end', command: 'grow', end, result }
         // Update end information and remove from processing[] and workers{}
-        let index = findProcessing(worker)
-        if (compareWorkers(worker, processing[index]) !== 0) EXIT(`got end message for worker missing from array!`, {msg, worker, index, processingLength: processing.length, processing: processing[index]})
+        let index = batcher.findProcessing(worker)
+        if (batcher.compareWorkers(worker, batcher.processing[index]) !== 0) EXIT(`got end message for worker missing from array!`, {msg, worker, index, processingLength: batcher.processing.length, processing: batcher.processing[index]})
 
-        // record profits
+        // record profits, successes, and failures
         if (command ==='hack') {
-          totalProfit += result || 0
+          batcher.totalProfit += result || 0
+          batcher.hackSuccess += result ? 1 : 0
+          batcher.hackFail += result ? 0 : 1
         }
 
         // delete worker from processing[] and workers{}, update counts
-        processing = processing.slice(0, index).concat(processing.slice(index + 1))
-        delete workers[id]
-        counts[command]--
-        executions[command]++
+        batcher.processing = batcher.processing.slice(0, index).concat(batcher.processing.slice(index + 1))
+        delete batcher.workers[id]
+        batcher.counts[command]--
+        batcher.executions[command]++
       } else {
         EXIT(`unknown message ${message}`, msg)
       }
@@ -267,13 +308,25 @@ export async function main(ns) {
   // let otherServers = [{"hostname":"n00dles","maxRam":4},{"hostname":"foodnstuff","maxRam":16},{"hostname":"sigma-cosmetics","maxRam":16},{"hostname":"joesguns","maxRam":16},{"hostname":"hong-fang-tea","maxRam":16},{"hostname":"harakiri-sushi","maxRam":16},{"hostname":"iron-gym","maxRam":32},{"hostname":"zer0","maxRam":32},{"hostname":"nectar-net","maxRam":16},{"hostname":"max-hardware","maxRam":32},{"hostname":"CSEC","maxRam":8},{"hostname":"silver-helix","maxRam":64},{"hostname":"phantasy","maxRam":32},{"hostname":"omega-net","maxRam":32},{"hostname":"neo-net","maxRam":32},{"hostname":"netlink","maxRam":16},{"hostname":"avmnite-02h","maxRam":64},{"hostname":"the-hub","maxRam":64},{"hostname":"I.I.I.I","maxRam":64},{"hostname":"summit-uni","maxRam":16},{"hostname":"zb-institute","maxRam":32},{"hostname":"catalyst","maxRam":128},{"hostname":"rothman-uni","maxRam":128},{"hostname":"alpha-ent","maxRam":128},{"hostname":"millenium-fitness","maxRam":64},{"hostname":"lexo-corp","maxRam":32},{"hostname":"aevum-police","maxRam":64},{"hostname":"rho-construction","maxRam":16},{"hostname":"global-pharm","maxRam":16},{"hostname":"omnia","maxRam":64},{"hostname":"unitalife","maxRam":32},{"hostname":"univ-energy","maxRam":128},{"hostname":"solaris","maxRam":16},{"hostname":"titan-labs","maxRam":128},{"hostname":"run4theh111z","maxRam":512},{"hostname":"microdyne","maxRam":64},{"hostname":"fulcrumtech","maxRam":128},{"hostname":"helios","maxRam":64},{"hostname":"vitalife","maxRam":64},{"hostname":".","maxRam":16},{"hostname":"omnitek","maxRam":512},{"hostname":"blade","maxRam":128},{"hostname":"powerhouse-fitness","maxRam":16}]
   let otherServers = []
   let usableServers = [...otherServers]
+  batcher.otherServers = otherServers
+  batcher.usableServers = usableServers
 
-  const copyScriptsToOtherServers = async () => {
-    for (let i = 0; i < otherServers.length; i++) {
-      await copyFilesToServer(otherServers[i].hostname)
+  const copyFilesToServers = async () => {
+    ns.write(getScriptName('hack'), getScript('hack'), 'w')
+    ns.write(getScriptName('grow'), getScript('grow'), 'w')
+    ns.write(getScriptName('weak'), getScript('weak'), 'w')
+    let servers = [...otherServers, host]
+    for (let i = 0; i < servers.length; i++) {
+      if (servers[i] === ns.getHostname()) continue
+      ns.rm(getScriptName('hack'), servers[i])
+      ns.rm(getScriptName('grow'), servers[i])
+      ns.rm(getScriptName('weak'), servers[i])
+      await ns.scp(getScriptName('hack'), servers[i])
+      await ns.scp(getScriptName('grow'), servers[i])
+      await ns.scp(getScriptName('weak'), servers[i])
     }
   }
-  await copyScriptsToOtherServers()
+  await copyFilesToServers()
 
   /**
    * Used to schedule weakens on other servers
@@ -287,6 +340,7 @@ export async function main(ns) {
     usableServers[0].maxRam -= weakScriptRam
     return usableServers[0].hostname
   }
+  batcher.findOtherServer = findOtherServer
 
   /**
    * Create a new worker
@@ -298,7 +352,7 @@ export async function main(ns) {
    * @param {number} execEnd Expected end time
    */
    const createWorker = (host, command, threads, id, execTime, execEnd) => {
-    if (workers[id]) return null
+    if (batcher.workers[id]) return null
 
     /**
      * @type{Worker}
@@ -318,60 +372,101 @@ export async function main(ns) {
       pid: null,
     }
 
-    workers[id] = worker
-    const scriptFile = `/remote/${command}.js`
-    worker.pid = ns.exec(scriptFile, host, threads, target, id, command, PORT, execTime)
+    batcher.workers[id] = worker
+    const scriptFile = getScriptName(command)
+    try {
+      worker.pid = ns.exec(scriptFile, host, threads, batcher.target, id, command, port, execTime)
+    } catch (ERR) {
+      EXIT(ERR, {args: [scriptFile, host, threads, batcher.target, id, command, port, execTime], worker, calculations: batcher.calculations})
+    }
     if (!worker.pid) {
-      EXIT(`could not exec() script`, {args: [scriptFile, host, threads, target, id, command, PORT], worker})  
+      EXIT(`could not exec() script`, {args: [scriptFile, host, threads, batcher.target, id, command, port, execTime], worker, calculations: batcher.calculations})  
     }
     return worker
   }
+  batcher.createWorker = createWorker
 
   ns.tprint(`Starting main loop at ${new Date().toLocaleTimeString()}`)
   ns.tprint(`    Expect results at ${new Date(new Date().valueOf() + ns.getWeakenTime(target)).toLocaleTimeString()}`)
 
   // for scheduling weaken commands
-  let nextWeak = new Date().valueOf()
-  let absoluteStartTime = new Date().valueOf()
+  batcher.nextWeak = new Date().valueOf()
+  batcher.absoluteStartTime = new Date().valueOf()
 
   // for special processing running first hack before first weaken
-  let firstHack = true 
+  batcher.firstHack = true 
 
-  let lastGrowCreatedAt = 0
-  let lastHackCreatedAt = 0
+  batcher.lastGrowCreatedAt = 0
+  batcher.lastHackCreatedAt = 0
 
   // method is weak, weak, grow, weak, weak, grow with hack in between
-  let expectedWeak = Math.ceil(ns.getWeakenTime(target) / WEAK_DELAY) // how many weakens will be running
-  let possibleHacks = Math.ceil(ns.getHackTime(target) / (WEAK_DELAY  * 4)) // how many hacks can we possibly fit?
+  batcher.expectedWeak = Math.ceil(ns.getWeakenTime(target) / (batcher.calculations.delay)) // how many weakens will be running
+  batcher.possibleHacks = batcher.calculations.activeHacks // how many hacks can we possibly fit?
 
   const removeOldProcessing = () => {
     let i = 0
     let time = new Date().valueOf() - 30000 // 30 seconds late
-    while (processing.length && i < processing.length && processing[i].eEnd < time) {
+    while (batcher.processing.length && i < batcher.processing.length && batcher.processing[i].eEnd < time) {
       i++
     }
     if (i > 0) {
-      obj.errors.push({ message: `Removing ${i} processing that are 30 seconds late`, rows: processing.slice(0, i)})
-      processing = processing.slice(i)
+      obj.errors.push({ message: `Removing ${i} processing that are 30 seconds late`, rows: batcher.processing.slice(0, i)})
+      batcher.processing = batcher.processing.slice(i)
     }
   }
 
-  const createReporter = () => {
+  const createResultReporter = () => {
     let lastReport = new Date().valueOf()
     return (data) => {
       const now = new Date().valueOf()
-      if (now - lastReport >= 10000) {
+      if (now - lastReport >= 60000) {
         lastReport = now
-        ns.tprint(JSON.stringify(counts))
         ns.tprint(JSON.stringify(data))
-        const seconds = (now - absoluteStartTime) / 1000
-        const perHour = totalProfit / (seconds / 3600)
-        ns.tprint(`${ns.nFormat(totalProfit, '$0,000.0a')} in ${ns.nFormat(seconds, '0,000')} or ${ns.nFormat(perHour, '$0,000.0a')} per hour`)
-
+        const seconds = (now - batcher.absoluteStartTime) / 1000
+        const perHour = batcher.totalProfit / (seconds / 3600)
+        if (!batcher.warmup) {
+          batcher.warmup = batcher.calculations.hTime * 5 / 1000
+        }
+        let maxPerHour = 0
+        if (seconds > batcher.warmup) {
+          maxPerHour = batcher.totalProfit / ((seconds - batcher.warmup) / 3600)
+        }
+        ns.tprint(`kills: ${JSON.stringify(batcher.kills)}/h max), counts: ${JSON.stringify(batcher.counts)}`)
+        ns.tprint(`${ns.nFormat(batcher.totalProfit, '$0,000.0a')} in ${ns.nFormat(seconds, '0,000')}s or ${ns.nFormat(perHour, '$0,000.0a')}/h (${ns.nFormat(maxPerHour, '$0,000.0a')}/h max)`)
       }
     }
   }
-  const report = createReporter()
+  const reportResults = createResultReporter()
+
+  const updateCalculations = () => {
+    let hackTime = ns.getHackTime(batcher.target)
+    if (hackTime < batcher.calculations.hTime) {
+      // we need to notify weakens of the new time, and may need to recalculate
+      let update = {
+        time: new Date().valueOf(),
+        timeString: new Date(new Date().valueOf()).toLocaleTimeString(),
+        oldLevel: batcher.player.skills.hacking,
+        newLevel: 0,
+        oldPlayer: batcher.player,
+        oldServer: batcher.server,
+        oldCalculations: batcher.calculations,
+      }
+      batcher.hackTimeUpdates.push(update)
+      batcher.player = ns.getPlayer()
+      batcher.newLevel = batcher.player.skills.hacking
+      batcher.server = ns.getServer(batcher.target)
+      let calculations = calculateHGW(batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns)
+      if (calculations) {
+        batcher.calculations = calculations
+        batcher.hWeakenTime.clear()
+        batcher.hWeakenTime.write(calculations.hTime * 5)
+      } else {
+        ns.tprint("ERROR: Cannot update calculations!")
+        ns.tprint('args: ' + JSON.stringify([batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns]))
+        ns.exit()
+      }
+    }
+  }
 
   //----------------------------------------------------------------------------------------------------
   // main loop
@@ -380,20 +475,20 @@ export async function main(ns) {
     // update information with messages from worker scripts
     processIncomingMessages()
     removeOldProcessing()
+    updateCalculations()
 
-    let ram = hostMaxRam - ns.getServerUsedRam(host)
-    if (ram < hackScriptRam) EXIT('Not enough ram!  Tweak your settings...', {ram, hostMaxRam, hackScriptRam})
+    batcher.availableRam = batcher.hostMaxRam - ns.getServerUsedRam(host)
 
-    // schedule weakens every WEAK_DELAY until we receive our first continue message from one
-    if ((nextWeak != 0) && (new Date().valueOf() >= nextWeak)) {
+    // schedule weakens every delay until we receive our first continue message from one
+    if ((batcher.nextWeak != 0) && (new Date().valueOf() >= batcher.nextWeak)) {
       let duration = ns.getWeakenTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
 
       // we can use other servers for weak
-      let useHost = findOtherServer(weakScriptRam) || host
-      if (createWorker(useHost, 'weak', WEAK_THREADS, id, duration, eEnd)) {
-        nextWeak += WEAK_DELAY
+      let useHost = batcher.findOtherServer(batcher.calculations.rW) || host
+      if (batcher.createWorker(useHost, 'weak', batcher.calculations.wt, id, duration, eEnd)) {
+        batcher.nextWeak += batcher.calculations.delay
         await ns.sleep(10)
         continue
       }
@@ -404,81 +499,49 @@ export async function main(ns) {
     // hacks so that we have two grows per hack.  We can schedule 8 times
     // as many grows since we use two grow per hack and since hacks only
     // take 1/4 the time
-    let missingHack = Math.max(possibleHacks - counts.hack, 0)
-    let missingHackRam = missingHack * hackScriptRam
-    let missingWeak = Math.max(expectedWeak - counts.weak, 0)
-    let missingWeakRam = missingWeak * weakScriptRam
-    let missingRam = missingHackRam + missingWeakRam + (RAM_SAFETY_FACTOR * hackScriptRam)
-    if (ram >  missingRam + growScriptRam) {
+    let missingHack = Math.max(batcher.possibleHacks - batcher.counts.hack, 0)
+    let missingHackRam = missingHack * batcher.calculations.rH
+    let missingWeak = Math.max(batcher.expectedWeak - batcher.counts.weak, 0)
+    let missingWeakRam = missingWeak * batcher.calculations.rW
+    let missingRam = missingHackRam + missingWeakRam + batcher.calculations.rH
+    
+    // if we have ram for this grow, and we have enough reserved for hacks for existing grows
+    // plus this one, and we haven't created a grow in the last 20ms, check if it will fit
+    if (batcher.availableRam > missingRam + batcher.calculations.rG && (new Date().valueOf() - batcher.lastGrowCreatedAt) >= 20) {
       let duration = ns.getGrowTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
 
-      let index = findProcessing({ eEnd, id })
-      const previousTwoAreWeak = processing[index - 1]?.command === 'weak' && processing[index - 2]?.command === 'weak'
-      const nextTwoAreWeak = processing[index]?.command === 'weak' && processing[index + 1]?.command === 'weak'
-      if (previousTwoAreWeak && nextTwoAreWeak && lastGrowCreatedAt < id - 20) {
-        lastGrowCreatedAt = id
-        if (createWorker(host, 'grow', GROW_THREADS, id, duration, eEnd)) {
+      let index = batcher.findProcessing({ eEnd, id })
+      let nextWorker = batcher.processing[index]
+      if (nextWorker && nextWorker.eEnd < eEnd + 200 && nextWorker.command === 'weak' && nextWorker.eEnd >= eEnd + 20) {
+        if (batcher.createWorker(host, 'grow', batcher.calculations.gt, id, duration, eEnd)) {
+          batcher.lastGrowCreatedAt = id
           await ns.sleep(10)
           continue
         }
       }
     }
 
-    if (ram >= hackScriptRam) {
+    if (batcher.availableRam >= batcher.calculations.rH) {
       let duration = ns.getHackTime(target)
       let id = new Date().valueOf()
       let eEnd = id + duration
 
-      let index = findProcessing({ eEnd, id })
-      
-      if (firstHack) {
-        // on first hack we schedule within 200ms of first weaken
-        if (processing.length > 0 && processing[0].eEnd - eEnd < 200 && processing[0].eEnd > eEnd) {
-          if (createWorker(host, 'hack', HACK_THREADS, id, duration, eEnd)) {
-            firstHack = false
-            await ns.sleep(10)
-            continue
-          }
-        }
-      } else {
-        // count previous grow until we reach beginning of list or another hack
-        let pastGrows = 0
-        for (let i = index - 1; i >= 0; i--) {
-          let w = processing[i]
-          if (w.command === 'hack') break
-          if (w.command === 'grow' && Math.abs(w.eEnd - eEnd) > 15) pastGrows++
-        }
-        
-        // count future grow until we reach end of list or another hack
-        let futureGrows = 0
-        for (let i = index; i < processing.length; i++) {
-          let w = processing[i]
-          if (w.command === 'hack') break
-          if (w.command === 'grow' && Math.abs(w.eEnd - eEnd) > 15) futureGrows++
-        }
-        
-        // skip current/previous for weaken find if it is within 20ms
-        const timeDiffCurrent = Math.abs(processing[index]?.eEnd - eEnd)
-        const timeDiffPrevious = Math.abs(processing[index - 1]?.eEnd - eEnd)
-        const skipCurrent = timeDiffCurrent < 10 ? 1 : 0
-        const skipPrevious = timeDiffPrevious < 2 ? 1 : 0
-        const previousIsWeak = processing[index - 1]?.command === 'weak' && processing[index - 1 - skipPrevious]?.command === 'weak'
-        const nextIsWeak = processing[index]?.command === 'weak' && processing[index + skipCurrent]?.command === 'weak'
-
-        if (previousIsWeak && nextIsWeak && pastGrows >= 2 && futureGrows >= 2 && lastHackCreatedAt < id - 20 ) {
-          lastHackCreatedAt = id
-          if (createWorker(host, 'hack', HACK_THREADS, id, duration, eEnd)) {
-            await ns.sleep(10)
-            continue
-          }
+      let index = batcher.findProcessing({ eEnd, id })
+      let found = batcher.processing[index]
+      if (found && found.command === 'grow' && found.eEnd - eEnd <= 150 && found.eEnd > eEnd + 20 && (new Date().valueOf() - batcher.lastHackCreatedAt) >= 20) {
+        if (batcher.createWorker(host, 'hack', batcher.calculations.ht, id, duration, eEnd)) {
+          batcher.firstHack = false
+          batcher.lastHackCreatedAt = id
+          await ns.sleep(10)
+          continue
         }
       }
     }
 
     // didn't start anything, delay 10ms and report if it's been 10s
-    report({ram, hostMaxRam, expectedWeak, possibleHacks})
+    reportResults({availableRam: batcher.availableRam, hostMaxRam: batcher.hostMaxRam, expectedWeak: batcher.expectedWeak, possibleHacks: batcher.possibleHacks})
     await ns.sleep(10)
   }
 }
@@ -511,7 +574,8 @@ function analyzeServer(ns, ram, hostname, cores = 1) {
   let player = ns.getPlayer()
   try {
     let server = ns.getServer(hostname)
-    let values = calculateForServer(ns, server, player, ram, cores)
+    let values = calculateHGW(server, player, ram, cores, 0, 200, ns)
+    //ns.tprint("analyzeServer() values: " + JSON.stringify(values))
     if (values) {
       return values
     } 
@@ -544,181 +608,238 @@ function analyzeAllServers(ns, ram, cores) {
   return results
 }
 
-/**
- * Calculate profits and best values to use for a given server,
- * player, and available ram.
- * 
- * @param {Server} server
- * @param {Player} player
- * @param {number} ram - gb available
- */
- function calculateForServer(ns, server, player, ram, cores = 1) {
-  let prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
-  let last = null
-  for (let i = 1; i < 1000; i++) {
-    // ns.tprint(`calculating for ${i} weaken threads`)
-    let calculated = calculateForWeakenThreads(ns, server, player, ram, i, cores)
-    if (!calculated) break;
-    last = calculated
-    
-    // target first option with delay betweek weakens of 80ms or more
-    if (calculated && calculated.delayWeakens >= 80) return calculated
+function report(ns, list, useLog = false) {
+  let sorted = [...list]
+  sorted.sort((a, b) => (b.profit || 0) - (a.profit || 0))
+
+  let results = sorted.filter(x => x.profit).map(x => {
+    try {
+
+      return {
+        hostname: x.hostname,
+        profit: x.profit ? ns.nFormat(x.profit, '$0,000.00a') : 'ERR',
+        'wtime': x.hTime ? ns.nFormat(x.hTime*5/1000, '0') + 's' : 'ERR',
+        'ram': x.ramUsed ? ns.nFormat(x.ramUsed, '0,000') : 'ERR',
+        'max$': x.maxm ? ns.nFormat(x.maxm, '$0.0a') : 'ERR',
+        'hack$': x.hm ? ns.nFormat(x.hm, '$0.0a') : 'ERR',
+        'grow$': x.gm ? ns.nFormat(x.gm, '$0.0a') : 'ERR',
+        
+        'active': x.activeHacks ? ns.nFormat(x.activeHacks, '0') : 'ERR',
+        'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
+      }
+    } catch (err) {
+      ns.tprint("FORMAT ERROR: " + err)
+      return null
+    }
+  })
+  results = results.filter(x => x) // throw away errors
+
+  if (results.length <= 0) {
+    ns.tprint('ERROR!  Cannot find any servers with valid results')
+    return
   }
-  ns.tprint(`could not find valid with delayWeakens >= 80 for ${server.hostname}`)
-  return last
-}
 
-/**
- * Solve how many grow threads are needed
- */
-function solveGrow(moneyMax, moneyAvailable, growPercent) {
-  // naive
-  let neededPercent = moneyAvailable / (moneyMax - moneyAvailable)
-  let neededThreads = neededPercent / growPercent
+  let table = createTable(results, {
+    align: { hostname: 'left' }
+  })
 
-  // calculated, if growPercent is .numCycleForGrowth
-
-
+  if (useLog) {
+    ns.print(`Using:\n` + table.join('\n') + '\n')
+  } else {
+    ns.tprint(`results:\n` + table.join('\n'))
+  }
 }
 
 /**
  * Calculate optimal 'batch' parameters for a server and player given 
- * given an amount of ram and number of cores (default 1)
+ * given an amount of ram and number of cores (default 1) with a delay
+ * of at least 200ms, which I think will always be the one with the
+ * lowest delay where we maximize the threads that will fit within a certain
+ * weaken number.
  * 
  * @param {Server} server
  * @param {Player} player
  * @param {number} ram - gb available
  * @param {number} cores - cores (default 1)
+ * @param {number} wt - weaken threads, if not passed will find based on delay > 200ms
+ * @param {number} minDelay - look for configurations with at least this delay, default 200ms
  */
-function calculateHGW(server, player, ram, cores = 1, ns) {
+ function calculateHGW(server, player, ram, cores = 1, wt = 0, minDelay = 200, ns) {
   // percent hacking with one thread
   let prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
-  let hackPercentOneThread = hacking.hackPercent(server, player)
-  let maxHacks = Math.trunc(0.95 / hackPercentOneThread)
-  // ns.tprint('maxHacks: ' + ns.nFormat(maxHacks, '0,000')) // 144 for rho-construction
-
-  let list = []
-  for (let ht = maxHacks; ht >= 1; ht--) {
-    let hp = hackPercentOneThread * ht
-    let hm = prepped.moneyMax * hp
-    let hacked = {...prepped, hackDifficulty: prepped.minDifficulty + ht * 0.002, moneyAvailable: prepped.moneyMax - hm}
-    let growPercentOneThread = hacking.growPercent(hacked, 1, player, cores) - 1
-    let growPercentNeeded = hm / hacked.moneyAvailable
-    let gt = Math.ceil(growPercentNeeded / growPercentOneThread)
-    let gp = hacking.growPercent(hacked, gt, player, cores) - 1
-    let gm = hacked.moneyAvailable * gp
-    while (gm >= hm && gt > 0) {
-      gt = gt - 1
-      gp = hacking.growPercent(hacked, gt, player, cores) - 1
-      gm = hacked.moneyAvailable * gp
+  let hacked = {...prepped}
+  let wtMin = wt ? wt : 1
+  let wtMax = wt ? wt : 100
+  for (let wt = wtMin; wt <= wtMax; wt++) {
+    let hackPercent = hacking.hackPercent(prepped, player)
+    let growPercentFn = (ht) => {
+      hacked.hackDifficulty = hacked.minDifficulty + ht * 0.002
+      hacked.moneyAvailable = hacked.moneyMax - (ht * hackPercent)
+      return hacking.growPercent(hacked, 1, player, cores)
     }
-    gt += 1
-    gp = hacking.growPercent(hacked, gt, player, cores) - 1
-    gm = hacked.moneyAvailable * gp
 
-    let wt = Math.ceil((gt * 0.004 + ht * 0.002) / 0.050)
-    // ns.tprint(JSON.stringify({ht, hp: ns.nFormat(hp, '0.00000'), gt, gp: ns.nFormat(gp, '0.00000'), wt}))
+    let { hackThreads, growThreads } = solveForWeakens(wt, hackPercent, growPercentFn)
+    // ns.tprint(JSON.stringify({wt, hackThreads, growThreads}))
+    let ht = hackThreads
+    let gt = growThreads
 
-    let batchRam = ht * 1.7 + gt * 4 * 1.75 + wt * 5 * 1.75
-    let profit = hm / batchRam
-    let concurrentBatches = Math.trunc(ram / batchRam) - 1
-    let hackTime = hacking.hackTime(server, player)
-    let batchesPerHour = 3600000/hackTime*concurrentBatches
-    let profitPerHour = batchesPerHour * hm
-    let batchDelay = hackTime / concurrentBatches
-    let referenceProfit = profitPerHour * (3600000 - (hackTime * 5))/3600000
-    list.push({ ht, gt, wt, hp, gp, hm, gm, batchRam, profit, hackTime,
-      batchesPerHour, profitPerHour, batchDelay, referenceProfit, concurrentBatches })
-  }
-  return list
-}
-
-/*
-How does this work out to 7.67t per hour, 7.12t for reference?
-
-10 hack, 30 grow, 3 weaken, $884.5m profit, 253.3gb, 406 delay, 52s hackTime
-works out to 128 concurrent batches, 32,422.4 gb
-Profit shows $7.56t/hr, $7.12t with reference warm-up, 10 hack, 30 grow, 3 weaken
-Manual verification - 128 concurrent batches, delay 406ms:
-  Active hack threads: 10 * 128 = 1280 * 1.7 = 2176gb
-  Active grow threads: 30 * 128 * 4 * 1.75 = 26880gb
-  Active weaken threads: 3 * 128 * 5 * 1.75 = 3360gb
-
-
-  // if grow percent is .25, hack percent can be at most .20, i.e. 100*0.20 = 80
-  // and 80*1.25 = 100.  So g$ = h$ equates to:
-  //  hack percent is 0.20, remaining percent is 0.80, grow percent is hack percent / remaining percent or 0.25
-  //  hack percent is 0.50, remaining percent is 0.50, grow percent is hack percent / remaining percent or 1.00
-  //  hack percent is 0.10, remaining percent is 0.90, grow percent is hack percent / remaining percent or .11111
-  //  so starting with grow percent, hp = gp * (1-hp))
-  //     or gp = hp/(1-hp)
-  //  Starting with gp, rp is 1/(1+gp), and hp is 1-rp, so hp is 1-(1/(1+gp))
-  let possibleHackPercent = 1-(1/(1+growPercent))
-  let hackThreads = Math.trunc(possibleHackPercent / HP)
-  if (weakenThreads * 25 < hackThreads) { // too many hack threads?!?  upside-down server growth
-    // use gp = hp/(1-hp)
-    hackThreads = weakenThreads * 25
-    hackPercent = hackThreads  * hacking.hackPercent(server, player)
-    growThreads = Math.ceil(hackPercent / GP)
-    growPercent = GP * growThreads
-  }
-
-  if (weakenThreads * 25 < hackThreads || Math.trunc(weakenThreads * 12.5) > growThreads) {
-    // ERROR!   I don't think this should happen, but whatever
-    // ns.tprint(`Could not find a thread count for ${server.hostname}!`)
-    return null
-  }
-
-  let weakenTime = hacking.weakenTime(server, player)
-  let growTime = hacking.growTime(server, player)
-  let hackTime = hacking.hackTime(server, player)
-  let hackChance = hacking.hackChance(server, player)
-  let hackExp = hacking.hackExp(server, player)
-
-  let ramUseForOneBatchPerHackTime = 
-      hackThreads * 1.7 +
-      growThreads * 4 * 1.75 * extraGrowFactor + // running 4x as many grows
-      weakenThreads * 5 * 1.75 * extraWeakenFactor + // running 5x as many as hacks plus fudge factor
-      weakenThreads * 4 * extraGrowFactor * 5/4 * 1.75 * extraWeakenFactor // running for eactra 4*extraGrowFactor grows and taking 5/4 the time
-
-  let hackScriptsPerHackTime = Math.trunc(ram / ramUseForOneBatchPerHackTime)
-  let growScriptsPerGrowTime = hackScriptsPerHackTime * 4 * extraGrowFactor
-  let weakenScriptsPerWeakenTime = (hackScriptsPerHackTime * 5 + growScriptsPerGrowTime * 5/4) * extraWeakenFactor
-
-  let successfulHackMoney = hackPercent * server.moneyMax
-  let expectedHackMoney = successfulHackMoney * hackChance
-  let profitPerHour = expectedHackMoney * hackScriptsPerHackTime * 3600000 / hackTime
-  let expectedExpForHacksPerHackScript = hackExp * (hackChance + ((1-hackChance)/4)) * hackThreads
-  let expectedExpForGrowsPerGrowScript = hackExp * growThreads
-  let expectedExpForWeakensPerWeakenScript = hackExp * weakenThreads
-  let expPerHour = (expectedExpForHacksPerHackScript * hackScriptsPerHackTime * 3600000 / hackTime) +
-      (expectedExpForGrowsPerGrowScript * growScriptsPerGrowTime * 3600000 / growTime) +
-      (expectedExpForWeakensPerWeakenScript * weakenScriptsPerWeakenTime * 3600000 / weakenTime);
-
-  // now detailed instructions for ramping up
-  let startHacks = weakenTime * 4/5
-  let delayHacks = hackTime / hackScriptsPerHackTime
-  let startGrows = weakenTime * 1/5
-  let delayGrows = growTime / growScriptsPerGrowTime
-  let startWeakens = 0
-  let delayWeakens = weakenTime / weakenScriptsPerWeakenTime
-
-  let calculatedRam = Math.trunc(hackTime / delayHacks) * 1.7 * hackThreads +
-    Math.trunc(growTime / delayGrows) * 1.75 * growThreads +
-    Math.trunc(weakenTime / delayWeakens) * 1.75 * weakenThreads 
+    if (wt && hackThreads && growThreads) {
+      let hp = hackThreads * hackPercent
+      let hm = hp * prepped.moneyMax
+      hacked.moneyAvailable = hacked.moneyMax - hm
+      hacked.hackDifficulty = hacked.minDifficulty + hackThreads * 0.002
+      let gp = hacking.growPercent(hacked, growThreads, player, cores) - 1
+      let gm = hacked.moneyAvailable * gp
+      let rH = hackThreads * 1.7
+      let rG = growThreads * 1.75
+      let rW = wt * 1.75
+      let ramUsed = rH + rG * 4 + rW * 5
+      let activeHacks = Math.trunc(ram / ramUsed)
+      let hTime = hacking.hackTime(prepped, player)
+      let delay = hTime / activeHacks
+      if (delay > minDelay) {
+        let hc = hacking.hackChance(prepped, player)
+        let profit = Math.trunc(3600000/delay) * hm * hc
+        let hExp = hacking.hackExp(prepped, player)
+        let tExp = hExp * hc + hExp * (1-hc) * ht + gt * hExp + wt * hExp
   
-  return {
-    profitPerHour, weakenTime, growTime, hackTime,
-    weakenThreads, hackThreads, growThreads,
-    startHacks, delayHacks, startGrows, delayGrows, startWeakens, delayWeakens,
-    successfulHackMoney, expectedHackMoney, extraWeakenFactor, extraGrowFactor,
-    hackChance, hackExp, expPerHour,
-    hostname: server.hostname,
-    moneyMax: server.moneyMax,
-    minDifficulty: server.minDifficulty,
-    requiredHackingSkill: server.requiredHackingSkill,
-    hackPercent, growPercent, hackScriptsPerHackTime,
-    calculatedRam, usableRam: ram
+        return {
+          ht, gt, wt, hp, gp, hm, gm, rH, rG, rW, ramUsed, activeHacks, hTime, delay,
+          hc, profit, hExp, tExp,
+          maxm: server.moneyMax,
+          hostname: server.hostname,
+        }
+      }
+    }
   }
+  return null;
+ }
+
+/**
+ * @param {number} growPercent - Grow multiplier for 1 thread (i.e. 1.0025)
+ * @param {number} money - Current money
+ * @param {number} moneyMax - Desired money after grows
+ */
+function solveGrow(growPercent, money, moneyMax) {
+  if (money >= moneyMax) { return 0; } // invalid
+  const needFactor = 1 + (moneyMax - money) / money
+  const needThreads = Math.log(needFactor)/Math.log(growPercent)
+  return Math.ceil(needThreads)
 }
-*/
+
+/**
+ * @param {number} weakenThreads - The number of weaken threads to optimize for
+ * @param {number} hackPercent - The percent hacked with one thread, adjust with fudge factor for hackChance if desired
+ * @param {function} growPercentFn - function taking hack threads and returning grow percent (i.e. 1.0025) for 1 grow thread
+ * @return {Object} Object with hackThreads and growThreads properties
+ */
+ function solveForWeakens(weakenThreads, hackPercent, growPercentFn) {
+  let minH = 1, maxH = weakenThreads * 24
+  let validH = 0, validG = 0
+  //ns.tprint(`Solving for weakens ${weakenThreads}, ${hackPercent}, ${growPercentFn}`)
+
+  while (minH <= maxH) {
+    let midH = (minH + maxH) >> 1
+    let growPercent = growPercentFn(midH)
+    let G = solveGrow(growPercent, 1e9*(1-(midH * hackPercent)), 1e9)
+    // ns.tprint(`${minH}-${midH}-${maxH}: ` + JSON.stringify({ G, growPercent }))
+    if (G * 0.004 + midH * 0.002 > weakenThreads * 0.050) { maxH = midH - 1; continue }
+    validH = midH
+    validG = G
+    minH = midH + 1
+  }
+
+  return { hackThreads: validH, growThreads: validG }
+}
+
+const getScriptName = (command) => {
+  return `/remote/${command}-hgw.js`
+}
+
+const getScript = (command) => {
+  if (command === 'hack') {
+    return `/** @param {NS} ns */
+      export async function main(ns) {
+        let [target, id, command, port, time] = ns.args
+        port = port || 5
+        const handle = ns.getPortHandle(port)
+        const handle2 = ns.getPortHandle(port + 1)
+        const obj = eval("window.obj = window.obj || {}")
+        obj.errors = obj.errors || []
+      
+        let start = new Date().valueOf()
+        // let time = ns.getHackTime(target)
+        let eEnd = start + time
+      
+        let msg = JSON.stringify({ id, message: 'start', command: 'hack', start, time, eEnd })
+        if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+      
+        let result = await ns.hack(target)
+      
+        let end = new Date().valueOf()
+        msg = JSON.stringify({ id, message: 'end', command: 'hack', end, result })
+        if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+      }
+      `
+  }
+  if (command === 'grow') {
+    return `/** @param {NS} ns */
+      export async function main(ns) {
+        let [target, id, command, port, time] = ns.args
+        port = port || 5
+        const handle = ns.getPortHandle(port)
+        const handle2 = ns.getPortHandle(port + 1)
+        const obj = eval("window.obj = window.obj || {}")
+        obj.errors = obj.errors || []
+      
+        let start = new Date().valueOf()
+        let eEnd = start + time
+      
+        let msg = JSON.stringify({ id, message: 'start', command: 'grow', start, time, eEnd })
+        if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+      
+        let result = await ns.grow(target)
+      
+        let end = new Date().valueOf()
+        msg = JSON.stringify({ id, message: 'end', command: 'grow', end, result })
+        if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+      }
+      `
+  }
+  if (command === 'weak') {
+    return `/** @param {NS} ns */
+      export async function main(ns) {
+        let [target, id, command, port, time] = ns.args
+        port = port || 5
+        const handle = ns.getPortHandle(port)
+        const handle2 = ns.getPortHandle(port + 1)
+        const handle3 = ns.getPortHandle(port + 2)
+        const obj = eval("window.obj = window.obj || {}")
+        obj.errors = obj.errors || []
+      
+        // weakens are different, they run continuously so we loop
+        let count = 0
+        let start = new Date().valueOf()
+        let eEnd = start + time
+        let end = null
+        let result = null
+        let msg = JSON.stringify({ id, message: 'start', command: 'weak', start, time, eEnd })
+        if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+      
+        while (true) {
+          result = await ns.weaken(target)
+      
+          if (!handle3.empty()) time = handle3.peek()
+          end = new Date().valueOf()
+          start = end
+          time = ns.getWeakenTime(target)
+          eEnd = start + time
+          count++
+          msg = JSON.stringify({ id, message: 'continue', command: 'weak', start, time, eEnd, end, result, count })
+          if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
+        }
+      }`
+  }
+
+  throw new Error(`getScript('${command}') - unknown command!`)
+}

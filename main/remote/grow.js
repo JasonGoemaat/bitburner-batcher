@@ -4,25 +4,18 @@ export async function main(ns) {
   port = port || 5
   const handle = ns.getPortHandle(port)
   const handle2 = ns.getPortHandle(port + 1)
+  const obj = eval("window.obj = window.obj || {}")
+  obj.errors = obj.errors || []
 
   let start = new Date().valueOf()
-  // let time = ns.getGrowTime(target)
   let eEnd = start + time
 
   let msg = JSON.stringify({ id, message: 'start', command: 'grow', start, time, eEnd })
-  if (!handle.tryWrite(msg)) {
-    if (!handle2.tryWrite(msg)) {
-      obj.errors[obj.errors.length] = msg
-    }
-  }
+  if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
 
   let result = await ns.grow(target)
 
   let end = new Date().valueOf()
   msg = JSON.stringify({ id, message: 'end', command: 'grow', end, result })
-  if (!handle.tryWrite(msg)) {
-    if (!handle2.tryWrite(msg)) {
-      ns.print('ERROR: cannot write to port')
-    }
-  }
+  if (!(handle.tryWrite(msg) || handle2.tryWrite(msg))) { obj.errors[obj.errors.length] = msg }
 }

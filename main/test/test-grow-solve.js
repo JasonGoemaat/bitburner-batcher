@@ -18,7 +18,7 @@ export async function main(ns) {
   let cores = 3
 
   let results = []
-  for (let ht = 10; ht < 260; ht += 10) {
+  for (let ht = 10; ht < 259; ht += (ht < 250) ? 10 : 1) {
     let hackPercent = hacking.hackPercent(baseServer, player)
     let hp = hackPercent * ht
     let hm = hp * moneyMax
@@ -49,7 +49,7 @@ export async function main(ns) {
     let sgThreads = solveGrow(gp1 + 1, remaining, moneyMax)
     let sg$ = remaining * (hacking.growPercent(hacked, sgThreads, player, cores) - 1)
 
-    let nsgThreads = newSolveGrow(gp1, remaining, moneyMax)
+    let nsgThreads = newSolveGrow(gp1 + 1, remaining, moneyMax)
     let nsg$ = remaining * (hacking.growPercent(hacked, nsgThreads, player, cores) - 1)
 
     results.push({
@@ -113,4 +113,25 @@ function newSolveGrow(base, money_lo, money_hi) {
   const needFactor = 1 + (money_hi - money_lo) / money_lo
   const needThreads = Math.log(needFactor)/Math.log(base)
   return Math.ceil(needThreads)
+}
+
+/**
+ * @param {number} weakenThreads - The number of weaken threads to optimize for
+ * @param {number} hackPercent - The percent hacked with one thread, adjust with fudge factor for hackChance if desired
+ * @param {number} growPercent - The MULTIPLIER for one grow thread (i.e. 1.0025 if a grow will add 0.25%, returned from formulas.hacking.growPercent()
+ * @return {number} The number of hack threads to use
+ */
+function solveForWeakens(weakenThreads, hackPercent, growPercent) {
+  let minH = 1, maxH = weakenThreads * 24
+  let valid = 0
+
+  while (minH > maxH) {
+    let midH = (minH + maxH) >> 1
+    let G = newSolveGrow(growPercent, 1e9*(1-(midH * hackPercent)), 1e9)
+    if (G * 0.004 + midH * 0.002 > weakenThreads * 0.050) { maxH = midH - 1; continue }
+    valid = midH
+    minH = midH + 1
+  }
+
+  return valid
 }
