@@ -1,33 +1,61 @@
 /** @param {NS} ns */
 export async function main(ns) {
   /** @type {Object[]} */
-  const zombies = eval(`window['zombies'] = window['zombies'] || []`)
-  // for (let i = 0; i < 1; i++) {
-  //   const zombieArgs = [i, 10, ns.getServer(ns.getHostname()).cpuCores]
-  //   ns.exec('/test/test-zombie.js', ns.getHostname(), 10, ...zombieArgs)
-  // }
+  // const zombies = eval(`window['zombies'] = window['zombies'] || []`)
+  const zombies = eval(`window['zombies'] = []`)
+  for (let i = zombies.length; i < 1; i++) {
+    const zombieArgs = [i, 10, ns.getServer(ns.getHostname()).cpuCores]
+    ns.exec('/test/test-zombie.js', ns.getHostname(), 10, ...zombieArgs)
+  }
+
   if (false) {
     ns.hack('foodnstuff')
     ns.grow('foodnstuff')
     ns.weaken('foodnstuff')
   }
 
-  let runOnZombie = async (command, ...args) => {
-    let zombie = await findZombie()
+  let runOnZombie = (zombie, duration, command, ...args) => {
+    ns.print(`runOnZombie command: ${command} taking ${ns.nFormat(duration || 0, '0')} ms, args: ${JSON.stringify(args)}`)
+    zombie.whenAvaialable = new Date().valueOf() + duration + 2000 // 2000 is fudge-factor
+    
+    // this seems to break straight-away
+    // zombie.active = true
+    // zombie.ns[command](...args).then(result => {
+    //   zombie.result = result
+    //   zombie.active = false
+    // })
+
+    zombie.ns[command](...args)
   }
 
   let findZombie = async () => {
-    ns.tprint('finding zombie')
+    ns.print('finding zombie')
     while (true) {
-      let time = new Date().valueOf()
       for (let i = 0; i < zombies.length; i++) {
-        if (zombies[i].finishTime < (time - 10)) {
-          ns.tprint(`found zombie ${i}`)
+        if ((zombies[i].whenAvaialable || 0) + 2000 < new Date().valueOf()) { // double fudge-factor
+          ns.print(`found zombie ${i}`)
           return zombies[i]
         }
       }
-      await ns.sleep(3000)
+      await ns.sleep(1000)
     }
+  }
+
+  while (true) {
+    let hZombie = await findZombie()
+    let ht = ns.getHackTime('foodnstuff')
+    runOnZombie(hZombie, ht, 'hack', 'foodnstuff')
+    await ns.sleep(ht)
+
+    let gZombie = await findZombie()
+    let gt = ns.getGrowTime('foodnstuff')
+    runOnZombie(gZombie, gt, 'grow', 'foodnstuff')
+    await ns.sleep(gt)
+
+    let wZombie = await findZombie()
+    let wt = ns.getWeakenTime('foodnstuff')
+    runOnZombie(wZombie, wt, 'weaken', 'foodnstuff')
+    await ns.sleep(wt)
   }
 
   while(true) {
