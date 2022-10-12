@@ -27,6 +27,7 @@ export async function main(ns) {
       `  command - optional, defaults to 'run'`,
       `      run     - default if not specified, runs batcher`,
       `      analyze - analyze server(s) and report as a table`,
+      `      details - analyze server(s) and report details a table`,
       `  port - first port to use for communication (default 5), uses port+1 and port+2 also`,
     ]
     ns.tprint('\n' + lines.join('\n'))
@@ -40,7 +41,7 @@ export async function main(ns) {
   // get host information
   host = host || ns.getHostname()
   let hostServer = ns.getServer(host)
-  let ram = (command === 'analyze') ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed // use all ram when anlyzing only
+  let ram = ((command === 'analyze' || command === 'details') && (host !== ns.getHostname())) ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed // use all ram when anlyzing only and if host isn't current computer
   let cores = hostServer.cpuCores
   ns.tprint(`WARNING: host is ${host}`)
 
@@ -50,8 +51,8 @@ export async function main(ns) {
   calculations.sort((a, b) => (b.profit || 0) - (a.profit || 0)) // highest profit first
   
   // if analyzing, report as a table and return
-  if (command === 'analyze') {
-    report(ns, calculations)
+  if (command === 'analyze' || command === 'details') {
+    (command === 'analyze' ? report : reportDetails)(ns, calculations)
     return
   }
 
@@ -425,13 +426,13 @@ export async function main(ns) {
         const seconds = (now - batcher.absoluteStartTime) / 1000
         const perHour = batcher.totalProfit / (seconds / 3600)
         if (!batcher.warmup) {
-          batcher.warmup = batcher.calculations.hTime * 5 / 1000
+          batcher.warmup = batcher.calculations.wTime / 1000
         }
         let maxPerHour = 0
         if (seconds > batcher.warmup) {
           maxPerHour = batcher.totalProfit / ((seconds - batcher.warmup) / 3600)
         }
-        ns.tprint(`kills: ${JSON.stringify(batcher.kills)}/h max), counts: ${JSON.stringify(batcher.counts)}`)
+        ns.tprint(`kills: ${JSON.stringify(batcher.kills)}, counts: ${JSON.stringify(batcher.counts)}`)
         ns.tprint(`${ns.nFormat(batcher.totalProfit, '$0,000.0a')} in ${ns.nFormat(seconds, '0,000')}s or ${ns.nFormat(perHour, '$0,000.0a')}/h (${ns.nFormat(maxPerHour, '$0,000.0a')}/h max)`)
       }
     }
@@ -459,7 +460,7 @@ export async function main(ns) {
       if (calculations) {
         batcher.calculations = calculations
         batcher.hWeakenTime.clear()
-        batcher.hWeakenTime.write(calculations.hTime * 5)
+        batcher.hWeakenTime.write(calculations.wTime)
       } else {
         ns.tprint("ERROR: Cannot update calculations!")
         ns.tprint('args: ' + JSON.stringify([batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns]))
@@ -618,13 +619,60 @@ function report(ns, list, useLog = false) {
       return {
         hostname: x.hostname,
         profit: x.profit ? ns.nFormat(x.profit, '$0,000.00a') : 'ERR',
-        'wtime': x.hTime ? ns.nFormat(x.hTime*5/1000, '0') + 's' : 'ERR',
+        'wTime': x.wTime ? ns.nFormat(x.wTime/1000, '0') + 's' : 'ERR',
         'ram': x.ramUsed ? ns.nFormat(x.ramUsed, '0,000') : 'ERR',
         'max$': x.maxm ? ns.nFormat(x.maxm, '$0.0a') : 'ERR',
         'hack$': x.hm ? ns.nFormat(x.hm, '$0.0a') : 'ERR',
         'grow$': x.gm ? ns.nFormat(x.gm, '$0.0a') : 'ERR',
-        
+        'delay': x.delay ? ns.nFormat(x.delay, '0') : 'ERR',
         'active': x.activeHacks ? ns.nFormat(x.activeHacks, '0') : 'ERR',
+        'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
+      }
+    } catch (err) {
+      ns.tprint("FORMAT ERROR: " + err)
+      return null
+    }
+  })
+  results = results.filter(x => x) // throw away errors
+
+  if (results.length <= 0) {
+    ns.tprint('ERROR!  Cannot find any servers with valid results')
+    return
+  }
+
+  let table = createTable(results, {
+    align: { hostname: 'left' }
+  })
+
+  if (useLog) {
+    ns.print(`Using:\n` + table.join('\n') + '\n')
+  } else {
+    ns.tprint(`results:\n` + table.join('\n'))
+  }
+}
+
+function reportDetails(ns, list, useLog = false) {
+  let sorted = [...list]
+  sorted.sort((a, b) => (b.profit || 0) - (a.profit || 0))
+
+  let results = sorted.filter(x => x.profit).map(x => {
+    try {
+
+      return {
+        hostname: x.hostname,
+        'max$': x.maxm ? ns.nFormat(x.maxm, '$0.0a') : 'ERR',
+        profit: x.profit ? ns.nFormat(x.profit, '$0,000.00a') : 'ERR',
+        'hTime': x.hTime ? ns.nFormat(x.hTime/1000, '0') + 's' : 'ERR',
+        'gTime': x.gTime ? ns.nFormat(x.gTime/1000, '0') + 's' : 'ERR',
+        'wTime': x.wTime ? ns.nFormat(x.wTime/1000, '0') + 's' : 'ERR',
+        'delay': x.delay ? ns.nFormat(x.delay, '0') : 'ERR',
+        'active': x.activeHacks ? ns.nFormat(x.activeHacks, '0') : 'ERR',
+        'ht': x.ht ? ns.nFormat(x.ht, '0,000') : 'ERR',
+        'gt': x.gt ? ns.nFormat(x.gt, '0,000') : 'ERR',
+        'wt': x.wt ? ns.nFormat(x.wt, '0,000') : 'ERR',
+        'ram': x.ramUsed ? ns.nFormat(x.ramUsed, '0,000') : 'ERR',
+        'hack$': x.hm ? ns.nFormat(x.hm, '$0.0a') : 'ERR',
+        'grow$': x.gm ? ns.nFormat(x.gm, '$0.0a') : 'ERR',
         'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
       }
     } catch (err) {
@@ -693,9 +741,11 @@ function report(ns, list, useLog = false) {
       let rH = hackThreads * 1.7
       let rG = growThreads * 1.75
       let rW = wt * 1.75
-      let ramUsed = rH + rG * 4 + rW * 5
+      let ramUsed = rH + rG * 16/5 + rW * 4
       let activeHacks = Math.trunc(ram / ramUsed)
       let hTime = hacking.hackTime(prepped, player)
+      let gTime = hacking.growTime(prepped, player)
+      let wTime = hacking.weakenTime(prepped, player)
       let delay = hTime / activeHacks
       if (delay > minDelay) {
         let hc = hacking.hackChance(prepped, player)
@@ -704,7 +754,8 @@ function report(ns, list, useLog = false) {
         let tExp = hExp * hc + hExp * (1-hc) * ht + gt * hExp + wt * hExp
   
         return {
-          ht, gt, wt, hp, gp, hm, gm, rH, rG, rW, ramUsed, activeHacks, hTime, delay,
+          ht, gt, wt, hp, gp, hm, gm, rH, rG, rW, ramUsed, activeHacks,
+          hTime, gTime, wTime, delay,
           hc, profit, hExp, tExp,
           maxm: server.moneyMax,
           hostname: server.hostname,
