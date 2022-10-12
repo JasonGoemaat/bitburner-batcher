@@ -4,7 +4,6 @@ export async function main(ns) {
   const zombies = eval(`window['zombies'] = window['zombies'] || []`)
   zombies[zombies.length] = { id, threads, cores: cores || 1, finishTime: 0, ns }
   if (false) ns.grow('n00dles') // say we're using ram
-  while(true) {
-    await ns.sleep(1e9)
-  }
+  let promise = new Promise(resolve => ns.quit = resolve);
+  await promise
 }
