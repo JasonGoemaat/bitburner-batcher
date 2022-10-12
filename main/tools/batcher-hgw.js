@@ -1,18 +1,3 @@
-/**
- * 1.7t in 1320 or 4.7t/h (6.2t/h max)
- * 2.4t in 1800s or 4.9t/h (6.0t/h max)
- * available ram hovering around 7200gb, I'm missing about 20%
- * 4.3t in 3001s or 5.1t/h (5.8t/h max)
- 
-/tools/grader-hgw.js: Finished testing after 1:00:00. Money increased by $5.20t, effective profit is $86.70b/min
-/tools/batcher-hgw.js: {"availableRam":7251.9000000000015,"hostMaxRam":32768,"expectedWeak":748,"possibleHacks":187}
-/tools/batcher-hgw.js: kills: {"weak":0,"grow":40747,"hack":35205}/h max), counts: {"weak":749,"grow":600,"hack":187}
-/tools/batcher-hgw.js: $5.2t in 3,601s or $5.2t/h ($5.7t/h max)
-
- */
-
-const GROWTH_FUDGE_FACTOR = 0.99 // Must recover this much of a hack
-
 import { createTable, getCustomFormulas } from "/lib"
 
 const hacking = getCustomFormulas()
@@ -21,29 +6,46 @@ const hacking = getCustomFormulas()
 export async function main(ns) {
   if (ns.args[0] === '--help' || ns.args[0] === '-h') {
     const lines = [
-      `Usage: run ${ns.getScriptName()} <host> <target> [command] [growPort] [hackPort]`,
-      `  <host>    - scripting host with lots of ram`,
-      `  <target>  - target computer, or 'all' which will pick`,
-      `  command - optional, defaults to 'run'`,
-      `      run     - default if not specified, runs batcher`,
-      `      analyze - analyze server(s) and report as a table`,
+      `Usage: run ${ns.getScriptName()} <command> <target> [-- host host] [--port port] [--gb gb]`,
+      `  command - optional, defaults to 'analyze'`,
+      `      analyze - (default) analyze server(s) and report as a table`,
       `      details - analyze server(s) and report details a table`,
+      `      run     - runs batcher`,
+      `  target  - optional, defaults to 'all'`,
+      `  host - host for H/G/W scripts, defaults to current server`,
       `  port - first port to use for communication (default 5), uses port+1 and port+2 also`,
+      `  gb   - limit ram usage to gb`,
     ]
     ns.tprint('\n' + lines.join('\n'))
     return
   }
   
-  let [host, target, command, port] = ns.args
-  // ns.tprint(JSON.stringify({host, target, command, port}))
-  port = port || 5
+  let args = [...ns.args]
+  let options = {}
+  const stripOption = (optionName, defaultValue) => {
+    for (let i = 0; i < args.length - 1; i++) {
+      if (args[i] === '--' + optionName) { options[optionName] = args[i + 1];  args = args.slice(0, i).concat(args.slice(i + 2)); return options[optionName] }
+    }
+    options[optionName] = defaultValue
+    return defaultValue
+  }
+  let host = stripOption('host', ns.getHostname())
+  let port = stripOption('port', 5)
+  let gb = stripOption('gb', 0)
+
+  let [command, target] = args
+  command = command || 'analyze'
+  target = target || 'all'
+
+  ns.tprint(`INFO: options is ${JSON.stringify(options)}`)
+  ns.tprint(`INFO: args is ${JSON.stringify(args)}`)
+  ns.tprint(`INFO: values are ${JSON.stringify({ host, port, gb, command, target })}`)
 
   // get host information
-  host = host || ns.getHostname()
   let hostServer = ns.getServer(host)
-  let ram = ((command === 'analyze' || command === 'details') && (host !== ns.getHostname())) ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed // use all ram when anlyzing only and if host isn't current computer
+  let ram = gb || (((command === 'analyze' || command === 'details') && (host !== ns.getHostname())) ? hostServer.maxRam : hostServer.maxRam - hostServer.ramUsed) // use all ram when anlyzing only and if host isn't current computer
   let cores = hostServer.cpuCores
-  ns.tprint(`WARNING: host is ${host}`)
+  ns.tprint(`INFO: host is ${host}, ram is ${ram}, target is ${target}`)
 
   // perform calculations and analyze server(s)
   const calculations = (target === 'all' || !target ? analyzeAllServers(ns, ram, cores) : [analyzeServer(ns, ram, target, cores)])
@@ -288,10 +290,12 @@ export async function main(ns) {
         if (batcher.compareWorkers(worker, batcher.processing[index]) !== 0) EXIT(`got end message for worker missing from array!`, {msg, worker, index, processingLength: batcher.processing.length, processing: batcher.processing[index]})
 
         // record profits, successes, and failures
-        if (command ==='hack') {
+        if (command === 'hack') {
           batcher.totalProfit += result || 0
           batcher.hackSuccess += result ? 1 : 0
           batcher.hackFail += result ? 0 : 1
+        } else if (command === 'grow') {
+          batcher.checkServerMoney = true
         }
 
         // delete worker from processing[] and workers{}, update counts
@@ -421,19 +425,22 @@ export async function main(ns) {
     return (data) => {
       const now = new Date().valueOf()
       if (now - lastReport >= 60000) {
-        lastReport = now
-        ns.tprint(JSON.stringify(data))
+        lastReport += 60000
         const seconds = (now - batcher.absoluteStartTime) / 1000
         const perHour = batcher.totalProfit / (seconds / 3600)
         if (!batcher.warmup) {
           batcher.warmup = batcher.calculations.wTime / 1000
         }
         let maxPerHour = 0
-        if (seconds > batcher.warmup) {
-          maxPerHour = batcher.totalProfit / ((seconds - batcher.warmup) / 3600)
+        let activeSeconds = seconds - batcher.warmup
+        if (activeSeconds > 10) {
+          maxPerHour = batcher.totalProfit / (activeSeconds / 3600)
         }
-        ns.tprint(`kills: ${JSON.stringify(batcher.kills)}, counts: ${JSON.stringify(batcher.counts)}`)
-        ns.tprint(`${ns.nFormat(batcher.totalProfit, '$0,000.0a')} in ${ns.nFormat(seconds, '0,000')}s or ${ns.nFormat(perHour, '$0,000.0a')}/h (${ns.nFormat(maxPerHour, '$0,000.0a')}/h max)`)
+        ns.tprint(`Report: \x1b[38;5;207m${batcher.target}\x1b[40m running on ${batcher.host}\n${JSON.stringify(data)}\n` +
+        `  kills: ${JSON.stringify(batcher.kills)}\n` +
+        `  counts: ${JSON.stringify(batcher.counts)}\n` + 
+        `  ${ns.nFormat(batcher.totalProfit, '$0,000.0a')} in ${ns.nFormat(seconds, '0,000')}s or ${ns.nFormat(perHour, '$0,000.0a')}/h  (${ns.nFormat(maxPerHour, '$0,000.0a')}/h max)`)
+        if (obj.errors.length > 100) obj.errors = obj.errors.slice(100)
       }
     }
   }
@@ -442,29 +449,62 @@ export async function main(ns) {
   const updateCalculations = () => {
     let hackTime = ns.getHackTime(batcher.target)
     if (hackTime < batcher.calculations.hTime) {
-      // we need to notify weakens of the new time, and may need to recalculate
-      let update = {
-        time: new Date().valueOf(),
-        timeString: new Date(new Date().valueOf()).toLocaleTimeString(),
-        oldLevel: batcher.player.skills.hacking,
-        newLevel: 0,
-        oldPlayer: batcher.player,
-        oldServer: batcher.server,
-        oldCalculations: batcher.calculations,
-      }
-      batcher.hackTimeUpdates.push(update)
-      batcher.player = ns.getPlayer()
-      batcher.newLevel = batcher.player.skills.hacking
       batcher.server = ns.getServer(batcher.target)
-      let calculations = calculateHGW(batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns)
+      batcher.player = ns.getPlayer()
+      let calculations = calculateHGW(batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, batcher.calculations.delay, ns)
       if (calculations) {
+        // we need to notify weakens of the new time, and may need to recalculate
+        let update = {
+          time: new Date().valueOf(),
+          timeString: new Date(new Date().valueOf()).toLocaleTimeString(),
+          oldLevel: batcher.player.skills.hacking,
+          newLevel: 0,
+          oldPlayer: batcher.player,
+          oldServer: batcher.server,
+          oldCalculations: batcher.calculations,
+        }
+        batcher.hackTimeUpdates.push(update)
+        batcher.player = ns.getPlayer()
+        batcher.newLevel = batcher.player.skills.hacking
+        batcher.server = ns.getServer(batcher.target)
+        let lines = []
+        lines.push('INFO: Calculation Update:')
+        lines.push(`ht: ${batcher.calculations.ht} => ${calculations.ht}`)
+        lines.push(`gt: ${batcher.calculations.gt} => ${calculations.gt}`)
+        lines.push(`wt: ${batcher.calculations.wt} => ${calculations.wt}`)
+        lines.push(`h$: ${ns.nFormat(batcher.calculations.hm, '$0.00a')} => ${ns.nFormat(calculations.hm, '$0.00a')}`)
+        lines.push(`g$: ${ns.nFormat(batcher.calculations.gm, '$0.00a')} => ${ns.nFormat(calculations.gm, '$0.00a')}`)
+        lines.push(`hTime: ${ns.nFormat(batcher.calculations.hTime, '0')} => ${ns.nFormat(calculations.hTime, '0')}`)
+        lines.push(`gTime: ${ns.nFormat(batcher.calculations.hTime, '0')} => ${ns.nFormat(calculations.gTime, '0')}`)
+        lines.push(`wTime: ${ns.nFormat(batcher.calculations.hTime, '0')} => ${ns.nFormat(calculations.wTime, '0')}`)
         batcher.calculations = calculations
         batcher.hWeakenTime.clear()
         batcher.hWeakenTime.write(calculations.wTime)
+        obj.updates = obj.updates || []
+        obj.updates.push(update)
       } else {
-        ns.tprint("ERROR: Cannot update calculations!")
-        ns.tprint('args: ' + JSON.stringify([batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns]))
-        ns.exit()
+        ns.print("ERROR: Cannot update calculations!\n")
+        // ns.tprint('args: ' + JSON.stringify([batcher.server, batcher.player, batcher.ram, batcher.cores, batcher.calculations.wt, 200, ns]))
+      }
+    }
+  }
+
+  const cancelNextHackIfMoneyLow = () => {
+    if (batcher.checkServerMoney) {
+      batcher.checkServerMoney = false;
+      let server = ns.getServer(batcher.target)
+      batcher.server = server
+      if (server.moneyMax - server.moneyAvailable > batcher.calculations.gm) {
+        for (let i = 0; i < batcher.processing.length; i++) {
+          let worker = batcher.processing[i]
+          if (worker.command === 'hack') {
+            ns.kill(worker.pid, worker.host)
+            batcher.kills.hack++
+            delete batcher.workers[worker.id]
+            batcher.processing = batcher.processing.slice(0,i).concat(batcher.processing.slice(i + 1))
+            return;
+          }
+        }
       }
     }
   }
@@ -475,6 +515,7 @@ export async function main(ns) {
   while (true) {
     // update information with messages from worker scripts
     processIncomingMessages()
+    cancelNextHackIfMoneyLow()
     removeOldProcessing()
     updateCalculations()
 
@@ -627,6 +668,7 @@ function report(ns, list, useLog = false) {
         'delay': x.delay ? ns.nFormat(x.delay, '0') : 'ERR',
         'active': x.activeHacks ? ns.nFormat(x.activeHacks, '0') : 'ERR',
         'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
+        'totalGB': x.totalRam ? ns.nFormat(x.totalRam, '0,000') : 'ERR',
       }
     } catch (err) {
       ns.tprint("FORMAT ERROR: " + err)
@@ -674,6 +716,7 @@ function reportDetails(ns, list, useLog = false) {
         'hack$': x.hm ? ns.nFormat(x.hm, '$0.0a') : 'ERR',
         'grow$': x.gm ? ns.nFormat(x.gm, '$0.0a') : 'ERR',
         'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
+        'totalGB': x.totalRam ? ns.nFormat(x.totalRam, '0,000') : 'ERR',
       }
     } catch (err) {
       ns.tprint("FORMAT ERROR: " + err)
@@ -718,7 +761,11 @@ function reportDetails(ns, list, useLog = false) {
   let hacked = {...prepped}
   let wtMin = wt ? wt : 1
   let wtMax = wt ? wt : 100
+  let previousWt = 0
   for (let wt = wtMin; wt <= wtMax; wt++) {
+    if (previousWt) {
+      wt = previousWt
+    }
     let hackPercent = hacking.hackPercent(prepped, player)
     let growPercentFn = (ht) => {
       hacked.hackDifficulty = hacked.minDifficulty + ht * 0.002
@@ -730,6 +777,16 @@ function reportDetails(ns, list, useLog = false) {
     // ns.tprint(JSON.stringify({wt, hackThreads, growThreads}))
     let ht = hackThreads
     let gt = growThreads
+
+    // once gt is null, we've filled memory and there is no solution using
+    // all memory and under 200ms delay.  So pick the previous wt and run with flag
+    if (!gt) {
+      previousWt = wt - 1
+      continue
+    }
+
+    // for debugging
+    // ns.tprint('INFO: ' + JSON.stringify({ wt, ht, gt}))
 
     if (wt && hackThreads && growThreads) {
       let hp = hackThreads * hackPercent
@@ -747,11 +804,12 @@ function reportDetails(ns, list, useLog = false) {
       let gTime = hacking.growTime(prepped, player)
       let wTime = hacking.weakenTime(prepped, player)
       let delay = hTime / activeHacks
-      if (delay > minDelay) {
+      if (delay > minDelay || previousWt) {
         let hc = hacking.hackChance(prepped, player)
         let profit = Math.trunc(3600000/delay) * hm * hc
         let hExp = hacking.hackExp(prepped, player)
         let tExp = hExp * hc + hExp * (1-hc) * ht + gt * hExp + wt * hExp
+        let totalRam = ramUsed * activeHacks
   
         return {
           ht, gt, wt, hp, gp, hm, gm, rH, rG, rW, ramUsed, activeHacks,
@@ -759,8 +817,14 @@ function reportDetails(ns, list, useLog = false) {
           hc, profit, hExp, tExp,
           maxm: server.moneyMax,
           hostname: server.hostname,
+          totalRam,
         }
       }
+    }
+
+    if (previousWt) {
+      ns.tprint(`ERROR: calculateHGW set previousWt, but that was not valid either!`)
+      return null
     }
   }
   return null;

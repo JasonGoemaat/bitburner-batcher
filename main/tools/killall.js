@@ -27,7 +27,7 @@ export async function main(ns) {
       let start = performance.now()
       let count = 0
 			list.forEach(info => {
-				if (info.filename.indexOf(command) >= 0) {
+				if (info.filename.indexOf(command) >= 0 || JSON.stringify(info.args).indexOf(command) >= 0) {
           count++
 					ns.kill(info.pid, x.hostname)
 				}
