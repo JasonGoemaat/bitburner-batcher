@@ -41,21 +41,47 @@ export async function main(ns) {
     }
   }
 
+  let runOnZombie2 = (zombie, duration, command, ...args) => {
+    ns.print(`runOnZombie2 command: ${command} taking ${ns.nFormat(duration || 0, '0')} ms, args: ${JSON.stringify(args)}`)
+    zombie.active = true
+    zombie.ns[command](...args).then(result => {
+      zombie.result = result
+      zombie.active = false
+    })
+  }
+
+  let findZombie2 = async () => {
+    ns.print('finding zombie')
+    while (true) {
+      for (let i = 0; i < zombies.length; i++) {
+        if (!zombies[i].active) {
+          ns.print(`found zombie ${i}`)
+          return zombies[i]
+        }
+      }
+      await ns.sleep(500)
+    }
+  }
+
+  ns.atExit(() => {
+    
+  })
+
   while (true) {
-    let hZombie = await findZombie()
+    let hZombie = await findZombie2()
     let ht = ns.getHackTime('foodnstuff')
-    runOnZombie(hZombie, ht, 'hack', 'foodnstuff')
-    await ns.sleep(ht)
+    runOnZombie2(hZombie, ht, 'hack', 'foodnstuff')
+    await ns.sleep(ht-2000)
 
-    let gZombie = await findZombie()
+    let gZombie = await findZombie2()
     let gt = ns.getGrowTime('foodnstuff')
-    runOnZombie(gZombie, gt, 'grow', 'foodnstuff')
-    await ns.sleep(gt)
+    runOnZombie2(gZombie, gt, 'grow', 'foodnstuff')
+    await ns.sleep(gt-2000)
 
-    let wZombie = await findZombie()
+    let wZombie = await findZombie2()
     let wt = ns.getWeakenTime('foodnstuff')
-    runOnZombie(wZombie, wt, 'weaken', 'foodnstuff')
-    await ns.sleep(wt)
+    runOnZombie2(wZombie, wt, 'weaken', 'foodnstuff')
+    await ns.sleep(wt-2000)
   }
 
   while(true) {
