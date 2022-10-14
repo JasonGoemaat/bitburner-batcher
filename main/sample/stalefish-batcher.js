@@ -1,4 +1,4 @@
-let HOST = 'huge'
+let HOST = 'home'
 
 // Solve for number of growth threads required to get from money_lo to money_hi
 function solveGrow(base, money_lo, money_hi) {
@@ -294,7 +294,7 @@ export async function main(ns) {
   await ns.write("/bin/weak.js", HGW_SCRIPT("weaken"), "w");
 
   const target_name = ns.args[0] ?? "rho-construction";
-  const duration    = ns.args[1] ?? 60 * 60;
+  const duration    = ns.args[1] ?? 60 * 60 * 60;
 
   while (true) {
     const time_epoch  = performance.now();

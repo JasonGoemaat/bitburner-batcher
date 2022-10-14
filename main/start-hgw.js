@@ -1,7 +1,8 @@
 /** @param {NS} ns */
 export async function main(ns) {
+  ns.tprint('usage: start-hgw [kill]')
   let hosts = ['peta', 'peta-0', 'peta-1', 'peta-2', 'peta-3']
-  let targets = ['rho-construction', 'the-hub', 'computek', 'summit-uni', 'alpha-ent']
+  let targets = ['alpha-ent', 'rho-construction', 'catalyst', 'lexo-corp', 'syscore']
 
   while (true) {
     let port = 1
@@ -9,6 +10,11 @@ export async function main(ns) {
 
     for (let i = 0; i < hosts.length; i++) {
       await killScripts(ns, hosts[i])
+    }
+
+    if (ns.args[0] === 'kill') {
+      ns.tprint('Done killing only, exiting...')
+      return
     }
 
     for (let i = 0; i < targets.length; i++) {
@@ -22,13 +28,13 @@ export async function main(ns) {
 
     for (let i = 0; i < pids.length; i++) {
       ns.tail(pids[i])
-      await ns.sleep(50)
+      await ns.sleep(500)
     }
 
     for (let i = 0; i < pids.length; i++) {
       ns.moveTail(1100, i * 250 + 20, pids[i])
       ns.resizeTail(1300, 240, pids[i])
-      await ns.sleep(50)
+      await ns.sleep(500)
     }
 
     var restartTime = new Date(new Date().valueOf() + 90*60*1000).toLocaleTimeString()

@@ -25,11 +25,25 @@ export async function main(ns) {
   })
 
   stockData = stockData.filter(x => x)
+  stockData = stockData.sort((a, b) => a.forecast - b.forecast)
   if (stockData.length === 0) {
     ns.tprint('NO STOCKS!')
     return
   }
-  let lines = createTable(stockData)
+  let lines = createTable(stockData.map(x => ({
+    symbol: x.symbol,
+    askPrice: ns.nFormat(x.askPrice, '$0,000.00'),
+    bidPrice: ns.nFormat(x.bidPrice, '$0,000.00'),
+    price: ns.nFormat(x.price, '$0,000.00'),
+    volatility: ns.nFormat(x.volatility, '0.00000'),
+    forecast: ns.nFormat(x.forecast, '0.00000'),
+    position: x.position,
+    maxShares: ns.nFormat(x.maxShares, '0,000.000a'),
+    buyFor: ns.nFormat(ns.stock.getPurchaseCost(x.symbol, x.maxShares, 'Long'), '$0,000.00a'),
+    calcFor: ns.nFormat(x.askPrice * x.maxShares + 200000, '$0,000.00a'),
+    buyHalfFor: ns.nFormat(ns.stock.getPurchaseCost(x.symbol, x.maxShares / 2, 'Long'), '$0,000.00a'),
+
+  })), { align: { symbol: 'left' }})
   ns.tprint('Stock data:\n' + lines.join('\n'))
 
   // let orders = ns.stock.getOrders()
