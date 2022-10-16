@@ -67,8 +67,10 @@ export async function main(ns) {
       if (server.openPortCount >= server.numOpenPortsRequired) {
         ns.nuke(server.hostname)
         server = Object.assign(server, ns.getServer(server.hostname))
+        await ns.sleep(100)
       }
       servers[server.hostname] = server
+      await ns.sleep(10)
     }
   }
   if (!options.nohack) await hackServers()
@@ -87,13 +89,14 @@ export async function main(ns) {
           let remoteFile = remoteFiles[j]
           if (serverFiles.indexOf(remoteFile) < 0) {
             await ns.scp(remoteFile, server.hostname, 'home')
-            await ns.sleep(10)
+            await ns.sleep(100)
           }
         }
       }
+      await ns.sleep(10)
     }
   }
-  await copyFilesToRemote()
+  // await copyFilesToRemote() // don't need this now, my batchers copy their own files
 
   let player = ns.getPlayer()
 
@@ -135,7 +138,7 @@ export async function main(ns) {
     let list = Object.values(servers)
     list.sort((a, b) => {
       const byOwned = (a.purchasedByPlayer && !b.purchasedByPlayer) ? -1 : (b.purchasedByPlayer && !a.purchasedByPlayer) ? 1 : 0
-      const byHacking = a.requiredHackingSkill - b.requiredHackingSkill
+      const byHacking = b.requiredHackingSkill - a.requiredHackingSkill
       const byName = a.hostname.localeCompare(b.hostname)
       return byOwned || byHacking || byName
     })
@@ -157,6 +160,7 @@ export async function main(ns) {
         avail: !server.maxRam ? '' : (server.ramUsed === 0 && server.hasAdminRights ? green : red) + ns.nFormat((server.maxRam - server.ramUsed) * 1e9 || 0, '0b'),
         '$': ns.nFormat(server.moneyMax || 0, '$0.0a'),
         '%$': server.moneyMax ? (((server.moneyAvailable === server.moneyMax) && server.moneyMax ? green  : '') + ns.nFormat((server.moneyAvailable || 0) / (server.moneyMax || 1), '0%')) : '',
+        'growth': server.serverGrowth ? ns.nFormat(server.serverGrowth, '0,000.00') : 'ERR',
         dmin: ns.nFormat(server.minDifficulty || 0, '0'),
         diff: (server.hackDifficulty === server.minDifficulty && server.minDifficulty > 1 ? green : '') + ns.nFormat(server.hackDifficulty || 0, '0.0'),
         ports: portsString(server),
@@ -166,4 +170,6 @@ export async function main(ns) {
     myprint('\n' + table.join('\n'))
   }
   displayGeneral()
+
+  ns.write('/var/servers.txt', JSON.stringify(servers), 'w')
 }

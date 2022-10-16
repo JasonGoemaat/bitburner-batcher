@@ -1,0 +1,226 @@
+# What to do?
+
+Early commands:
+
+    run simple.js n00dles all
+    run tools/prep-auto.js --ignore harakiri-sushi,n00dles --host small --tail
+    
+    run sample/diamond-hands.js
+    run sample/stalefish-batcher.js alpha-ent peta-1 --tail
+
+
+## Starting a new BitNode
+
+After the first, you will start with +16% multipliers and 32gb ram, so that is nice.
+The first thing to do is increase hacking skill and get a little cash.  This command
+will map out the servers, root what you can, and show stats on all the servers.
+
+> run tools/scan.js
+
+You start with these servers with ram available:
+
+* 4gb
+  * n00dles
+* 16gb
+  * foodnstuff 
+  * sigma-cosmetics
+  * joesguns
+  * nectar-net
+  * hong-fang-tea
+  * harakiri-sushi
+  
+So run a command to start hacking n00dles automatically with all available servers:
+
+    run simple.js n00dles all
+
+* After 2m15 the grows finish and I'm level 11
+* After 37s, the hacks finish and I'm level 15
+* After 35s, another hack round finishes and I'm level 18 and have $324k
+
+Now go to 'Alpha-Ent' on the city map and buy a TOR Router for $200k
+
+Soon we should have $500k and can buy BruteSSH.exe to root some more servers:
+
+* 8gb
+  * CSEC
+* 32gb
+  * neo-net
+  * zer0
+  * max-hardware
+  * iron-gym
+
+Look out for other money milestones to open more ports and get more free ram for our scripts:
+
+* $1.5m - FTPCrack.exe
+* $5m - relaySMTP.exe
+* $30m - HTTPWorm.exe
+* $250m - SQLInject.exe
+
+After getting FTPCrack.exe and relaySMTP.exe we have some more servers:
+
+32gb - phantasy
+64gb - silver-helix
+32gb - omega-net
+64gb - avmnite-02h (backdoor)
+8gb - the-hub
+64gb - I.I.I.I (backdoor)
+32gb - netlink
+16gb - rothman-uni
+128gb - catalyst
+32gb - summit-uni
+64gb - rho-construction
+128gb - millenium-fitness
+
+Let's get those to work on harakiri-sushi also
+
+    run simple.js harakiri-sushi phantasy,silver-helix,omega-net,avmnite-02h,the-hub,I.I.I.I,netlink,rothman-uni,catalyst,summit-uni,rho-construction,millenium-fitness
+
+Great, let's get those working on foodnstuff:
+
+    run simple.js foodnstuff CSEC,neo-net,zer0,max-hardware,iron-gym
+
+Actually, foodnstuff sucks for growth, once you hit hacking level 40 (or before
+because it takes a while to weaken/grow), run it on harakiri-sushi after killing
+those on the servers:
+
+    run simple.js harakiri-sushi CSEC,neo-net,zer0,max-hardware,iron-gym
+
+* The weakens will take 4:15 the first round
+
+Now I have $3.5m, enough to buy a 64gb server
+
+    run tools/servers.js buy small 64
+
+And I'll run a script to automatically work on prepping servers, ignoring the ones we're hacking:
+
+    run tools/prep-auto.js --ignore harakiri-sushi,n00dles --host small --tail
+
+That'll get us some xp and prepare the servers for future hacking.
+
+Actually going to the city and slums and doing 'rob a store', 36% success, about 100 seconds,
+and would make $464k plus some good hacking/dex/agi xp
+
+
+
+
+
+This will be running weaken, grow, and hack against n00dles.  n00dles doesn't have a lot of money,
+but it has 3000 growth so you don't spend as much time growing it.
+
+One of the first things to do should be to raise hacking skill.  
+This can be slow when you start a new bitnode, especially one where the modifiers
+are low.  The home server starts with 4gb I think, not even enough to run some of the
+scripts I use ALL the time
+
+* `tools/scan.js` - 5.4gb
+* `simple.js` - 7.4gb
+
+Some help can be had running things on these servers:
+
+* 16gb - (1 hacking) foodnstuff
+* 4gb  - (1 hacking) n00dles
+* 16gb - (5 hacking) sigma-cosmetics
+
+Until getting at least 8gb of ram (costs $???.?k), you can manually copy /remote/simple.js
+to foodnstuff, connect to foodnstuff, and run it there with 7 threads, targeting the same
+server.  You can help by running manual `weaken` and `grow` commands to get it started.
+
+  scp remote/simple.js foodnstuff
+  connect foodnstuff
+  run remote/simple.js foodnstuff 4 4.5e10 7 -t 7 --tail
+
+The args are target difficulty (4 when min is 3), target money ($45m max is $50m)
+and number of threads to use for hacking, which might be good to lower, and '--tail'
+which opens the log so you can see what is happening.  You will probably have to wait quite
+a bit for it to maximize the server's money and then it will start hacking and making you money.
+It will be gaining you xp along the way, so you can copy the script to sigma-cosmetics
+and run it there when you hti level 5.
+
+## End-grme scripts
+
+* run sample/stalefish-batcher.js ecorp home --tail
+
+
+
+
+Ok, at level 222 I bought two 4tb servers ('tera' and 'tera-0'), time to rock it!
+
+Prepping omega-net with one:
+
+    run tools/prep.js omega-net --host tera
+
+And grinding xp with the other:
+
+    run start-grind.js tera-0
+
+Bought a 16tb server 'tera-1' and finally time to start batching!  Got 848m at 12:35
+
+    ┌──────────┬──────────┬───────┬─────┬─────────┬────────┬────────┬───────┬────────┬────────┬─────────┐
+    │ hostname │   profit │ wTime │ ram │    max$ │  hack$ │  grow$ │ delay │ active │ chance │ totalGB │
+    ├──────────┼──────────┼───────┼─────┼─────────┼────────┼────────┼───────┼────────┼────────┼─────────┤
+    │ phantasy │ $198.63b │  117s │ 136 │ $600.0m │ $15.7m │ $16.0m │   245 │    120 │  85.9% │  16,284 │
+    └──────────┴──────────┴───────┴─────┴─────────┴────────┴────────┴───────┴────────┴────────┴─────────┘
+
+Expect results at 12:37:15
+
+Oh, hell yeah, raking in the billions now...
+
+    Report: phantasy (tera-1): +$10.224b, $10.224b in 300s or $122.692b/h or $200.926b/h
+    INFO: Level 296: hgw 9/20/2, active 110/367/479
+
+Should take like 20 minutes to get $57.7b and I can buy a peta server
+
+    Report: phantasy (tera-1): +$16.762b, $26.986b in 600s or $161.916b/h or $201.059b/h
+    Report: phantasy (tera-1): +$16.830b, $43.816b in 900s or $175.264b/h or $201.404b/h
+
+Ok, with peta I can move on to omega-net:
+
+    ┌───────────┬────────┬───────┬───────┬───────┬─────────┬─────────┬───────┬────────┬────────┬─────────┬────────────┐
+    │ hostname  │ profit │ wTime │   ram │  max$ │   hack$ │   grow$ │ delay │ active │ chance │ totalGB │        hgw │
+    ├───────────┼────────┼───────┼───────┼───────┼─────────┼─────────┼───────┼────────┼────────┼─────────┼────────────┤
+    │ omega-net │ $8.89t │  227s │ 2,923 │ $1.6b │ $686.0m │ $687.1m │   200 │    283 │  72.0% │ 827,266 │ 210/407/41 │
+    └───────────┴────────┴───────┴───────┴───────┴─────────┴─────────┴───────┴────────┴────────┴─────────┴────────────┘
+
+    /tools/batcher-hgw.js: Starting main loop at 1:02:37 AM
+    /tools/batcher-hgw.js:     Expect results at 1:06:23 AM
+
+Should have some serious xp grinding servers soon...
+
+Ok, finally fixed my nagging issue - solveForWeakens() didn't take into account that hack
+percent could be over 100%, now it limits it to 90% or decreases hack threads.
+
+    ┌───────────┬─────────┬───────┬───────┬───────┬───────┬───────┬───────┬────────┬────────┬───────────┬────────────┐
+    │ hostname  │  profit │ wTime │   ram │  max$ │ hack$ │ grow$ │ delay │ active │ chance │   totalGB │        hgw │
+    ├───────────┼─────────┼───────┼───────┼───────┼───────┼───────┼───────┼────────┼────────┼───────────┼────────────┤
+    │ omega-net │ $15.94t │  155s │ 5,429 │ $1.6b │ $1.1b │ $1.1b │   202 │    192 │  83.2% │ 1,042,445 │ 234/806/74 │
+    └───────────┴─────────┴───────┴───────┴───────┴───────┴───────┴───────┴────────┴────────┴───────────┴────────────┘
+
+    /tools/batcher-hgw.js: Starting main loop at 1:29:16 AM
+    /tools/batcher-hgw.js:     Expect results at 1:31:51 AM
+
+  Man, grinder is killing it...
+
+    Ensuring server omega-net is ready
+    killed 71 weak-hgw.js scripts
+    Starting main loop at 1:29:16 AM
+    Expect results at 1:31:51 AM
+    INFO: Level 511: hgw 234/808/74, active 0/0/3
+    INFO: Level 512: hgw 233/803/74, active 0/0/66
+    INFO: Level 513: hgw 233/804/74, active 0/9/163
+    INFO: Level 514: hgw 233/806/74, active 0/79/232
+    INFO: Level 515: hgw 233/808/74, active 0/154/308
+    INFO: Level 516: hgw 232/803/74, active 0/245/398
+    INFO: Level 517: hgw 232/804/74, active 0/335/489
+    INFO: Level 518: hgw 232/806/74, active 0/420/573
+    INFO: Level 519: hgw 232/807/74, active 91/515/667
+    INFO: Level 520: hgw 232/809/74, active 160/584/737
+    First hack finished!
+    INFO: Level 521: hgw 231/804/74, active 246/603/769
+    INFO: Level 522: hgw 231/805/74, active 209/610/769
+    INFO: Level 523: hgw 231/807/74, active 242/604/769
+    INFO: Level 524: hgw 231/808/74, active 227/606/769
+    INFO: Level 525: hgw 230/803/74, active 202/610/769
+    INFO: Level 526: hgw 230/805/74, active 169/606/769
+    INFO: Level 527: hgw 230/806/74, active 187/603/769
+    Report: omega-net (peta): +$581.235b, $581.235b in 300s or $6.975t/h or $14.436t/h
+    INFO: Level 528: hgw 230/808/74, active 205/614/769

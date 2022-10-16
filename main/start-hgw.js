@@ -1,8 +1,10 @@
 /** @param {NS} ns */
 export async function main(ns) {
   ns.tprint('usage: start-hgw [kill]')
-  let hosts = ['peta', 'peta-0', 'peta-1', 'peta-2', 'peta-3']
-  let targets = ['alpha-ent', 'rho-construction', 'catalyst', 'lexo-corp', 'syscore']
+  // let hosts = ['peta', 'peta-0', 'peta-1', 'peta-2', 'peta-3']
+  // let targets = ['alpha-ent', 'rho-construction', 'catalyst', 'lexo-corp', 'syscore']
+  let hosts = ['peta', 'peta-2']
+  let targets = ['the-hub', 'alpha-ent']
 
   while (true) {
     let port = 1
@@ -38,6 +40,7 @@ export async function main(ns) {
     }
 
     var restartTime = new Date(new Date().valueOf() + 90*60*1000).toLocaleTimeString()
+    ns.print(`Done starting batchers, waiting 90 minutes to restart at ${restartTime}...`)
     ns.tprint(`Done starting batchers, waiting 90 minutes to restart at ${restartTime}...`)
     await ns.sleep(90*60*1000)
 

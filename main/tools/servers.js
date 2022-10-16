@@ -22,8 +22,15 @@ export async function main(ns) {
 	// ns.tprint(`Have ${current.length}/${limit} servers`)
 
 	let options = []
-	for (let i = 4; i <= ns.getPurchasedServerMaxRam(); i *= 2) {
+  let maxAffordableGb = 0
+  let maxIndex = 0
+  let c = 0
+	for (let i = 4; i <= ns.getPurchasedServerMaxRam(); i *= 2, c++) {
 		let cost = ns.getPurchasedServerCost(i)
+    if (cost < player.money) {
+      maxAffordableGb = i
+      maxIndex = c
+    }
 		options.push({ cost, gb: i })
 	}
 
@@ -49,17 +56,17 @@ export async function main(ns) {
 			}
 			let min = 0, max = options.length - 1
 			if (command === 'list') {
-				let maxIndex = 0
 				for (let i = 0; i < options.length; i++) {
 					if (options[i].cost < player.money && options[i].cost > options[maxIndex].cost) maxIndex = i;
 				}
-				min = Math.max(0, maxIndex - 3)
-				max = Math.min(maxIndex + 1, options.length - 1)
+				min = Math.max(0, maxIndex - 2)
+				max = Math.min(maxIndex + 2, options.length - 1)
 			}
 			ns.tprint('')
 			ns.tprint('Options: ')
 			for (let i = min; i <= max; i++) {
         let buyCommand = `buy <hostname> ${options[i].gb}`
+        if (i === maxIndex) buyCommand += '  <--- Max Affordable'
         let gb = `${options[i].gb}`
 				ns.tprint(`  ${gb.padStart(8)}GB for ${ns.nFormat(options[i].cost, '$0,000.0a').padStart(7)} - ${buyCommand}`)
 			}
@@ -73,6 +80,7 @@ export async function main(ns) {
 				let deleteResult = await ns.deleteServer(oldHostname)
 				ns.tprint(`Deleted server ${oldHostname} result ${deleteResult}`)
 			}
+      if (gb === 'auto') gb = maxAffordableGb
 			let result = await ns.purchaseServer(hostname, gb)
 			if (!result) {
 				ns.tprint(`FAILED! '${hostname}' with ${gb}GB result '${result}'`)

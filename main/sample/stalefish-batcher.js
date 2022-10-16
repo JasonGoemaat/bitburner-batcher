@@ -1,4 +1,4 @@
-let HOST = 'home'
+let HOST = 'peta'
 
 // Solve for number of growth threads required to get from money_lo to money_hi
 function solveGrow(base, money_lo, money_hi) {
@@ -20,6 +20,7 @@ function solveGrow(base, money_lo, money_hi) {
 async function calcBatchParams(ns, target_name, hacking_levels = 1, t0 = 50) {
   const target = ns.getServer(target_name);
   const host   = ns.getServer(HOST);
+  ns.tprint(`INFO: Targeting ${target_name} using ${HOST}`)
   const player = JSON.parse(JSON.stringify(ns.getPlayer()));
 
   const hack_time_hi = ns.formulas.hacking.hackTime(target, player);
@@ -126,7 +127,7 @@ async function calcBatchParams(ns, target_name, hacking_levels = 1, t0 = 50) {
 }
 
 /** @param {NS} ns */
-async function runBatcher(ns, params, duration) {
+async function runBatcher(ns, params, duration, minDuration) {
   let player = ns.getPlayer();
   let target = ns.getServer(params.target);
 
@@ -158,8 +159,9 @@ async function runBatcher(ns, params, duration) {
 
   const first_batch = [params.kW - params.kH, 0, params.kW - params.kG, 0];
 
-  const time_epoch = performance.now() + params.t0;
-  const time_end   = time_epoch + duration;
+  const time_epoch   = performance.now() + params.t0;
+  const time_end     = time_epoch + duration;
+  const time_end_min = time_epoch + (minDuration || 0);
 
   for (let batch = 0;; ++batch) {
       const iW = batch % params.kW;
@@ -195,7 +197,7 @@ async function runBatcher(ns, params, duration) {
       player = ns.getPlayer();
       target = ns.getServer(params.target);
 
-      if (player.skills.hacking > params.max_hacking || time_begin > time_end) {
+      if ((player.skills.hacking > params.max_hacking && time_begin > time_end_min) || time_begin > time_end) {
           ns.print(ns.sprintf("ERROR: %5d Ending batching", batch));
 
           for (let i = 0; i < 4; ++i) {
@@ -246,8 +248,8 @@ async function runBatcher(ns, params, duration) {
 
       if (dispatch) {
           let dispatch_error = false;
-
-          for (let i = 0; i < 4; ++i) {
+          let i = 0
+          for (i = 0; i < 4; ++i) {
               if (batch < first_batch[i]) { continue; }
 
               // pids[i][this_index[i]] = ns.run(scripts[i], params.threads[i], params.target, time_begin + delays[i]);
@@ -263,7 +265,7 @@ async function runBatcher(ns, params, duration) {
           if (dispatch_error) {
               ns.print(ns.sprintf("ERROR: %5d Could not dispatch %s", batch, scripts[i]));
 
-              for (let i = 0; i < 4; ++i) {
+              for (i = 0; i < 4; ++i) {
                   ns.kill(pids[i][this_index[i]], HOST);
                   pids[i][this_index[i]] = 0;
               }
@@ -289,19 +291,32 @@ function HGW_SCRIPT(name) {
 export async function main(ns) {
   ns.disableLog("ALL");
 
+  const target_name = ns.args[0] ?? "rho-construction";
+  // const duration    = ns.args[1] ?? 60 * 60 * 60;
+  const duration = 60 * 60 * 60;
+  HOST = ns.args[1] || HOST
+
   await ns.write("/bin/hack.js", HGW_SCRIPT("hack"),   "w");
   await ns.write("/bin/grow.js", HGW_SCRIPT("grow"),   "w");
   await ns.write("/bin/weak.js", HGW_SCRIPT("weaken"), "w");
 
-  const target_name = ns.args[0] ?? "rho-construction";
-  const duration    = ns.args[1] ?? 60 * 60 * 60;
+  if (HOST !== ns.getHostname()) {
+    ns.rm('/bin/hack.js', HOST)
+    ns.rm('/bin/grow.js', HOST)
+    ns.rm('/bin/weak.js', HOST)
+    await ns.scp('/bin/hack.js', HOST)
+    await ns.scp('/bin/grow.js', HOST)
+    await ns.scp('/bin/weak.js', HOST)
+  }
 
   while (true) {
     const time_epoch  = performance.now();
     const money_epoch = ns.getPlayer().money;
 
     for (;;) {
-        const params = await calcBatchParams(ns, target_name, 30);
+        let p = ns.getPlayer()
+        let levels = Math.max(30, Math.ceil(p.skills.hacking / 40))
+        const params = await calcBatchParams(ns, target_name, levels);
         if (!params) { throw new Error(`Could not calculate batch params for ${target_name}`); }
     
         const  time_begin = (performance.now() - time_epoch) / 1000;
@@ -319,7 +334,8 @@ export async function main(ns) {
         ns.tprintf(`    Batch time: ${time_batch.toFixed(0).padStart(4)} (${ns.nFormat(time_batch, "0:00:00")})`);
         ns.tprintf(`     Batch DPS: \$${ns.nFormat(params.dps, "0.000a")}/s`)
 
-        await runBatcher(ns, params, (duration - time_batch) * 1000);
+        const minRunTime = 10 * 60 * 1000; // 10 minutes no matter what
+        await runBatcher(ns, params, (duration - time_batch) * 1000, minRunTime);
 
         const  time_end = (performance.now() - time_epoch) / 1000;
         const money_end = ns.getPlayer().money - money_epoch;

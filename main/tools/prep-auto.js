@@ -1,10 +1,12 @@
 import { getOptions, showUsage, getCustomFormulas } from '/lib'
 
 const defaultOptions = [
-  ['--host'       , '', '--host <hostname> - use specified host'],
+  ['--host'       ,''   , '--host <hostname> - use specified host'],
   ['--help'       , null, '--help - display this help'],
-  ['--ignore'     , '', '--ignore server1,server2,server3'],
-  ['+targets', '', 'target server(s) separated by commas']
+  ['--ignore'     ,''   , '--ignore server1,server2,server3'],
+  ['+targets'     ,''   , 'target server(s) separated by commas'],
+  ['--cont'       , null, '--cont - continue prepping'],
+  ['--reserve'    , 0   , '--reserve <gb> - reserve mem on host'],
 ]
 
 /** @param {NS} ns */
@@ -21,9 +23,11 @@ export async function main(ns) {
 
   /** @type {string[]} */
   let targetList = []
+  let continuePrepping = options.cont
   if (options.targets && options.targets.length > 0) {
     ns.tprint('using targets option: ' + options.targets)
     targetList = options.targets.split(',')
+    continuePrepping = true
   } else {
     ns.tprint('finding servers...')
     const servers = {}
@@ -61,6 +65,9 @@ export async function main(ns) {
   let host = options.host && options.host.length > 0 ? options.host : ns.getHostname()
   const hacking = getCustomFormulas()
 
+  let reserve = options.reserve
+  if (reserve) { ns.tprint(`Reserving ${reserve} on ${host}`)}
+
   const weakenScript = '/remote/prep-weaken.js'
   const growScript = '/remote/prep-grow.js'
   if (host !== ns.getHostname()) {
@@ -69,6 +76,7 @@ export async function main(ns) {
     await ns.scp(growScript, host)
   }
 
+  let isFinished = false
   let runningScripts = {}
   while(true) {
     let player = ns.getPlayer()
@@ -79,12 +87,12 @@ export async function main(ns) {
         if (x[1].weak2 && !ns.isRunning(x[1].weak2)) delete x[1].weak2
         if (x[1].weak && !ns.isRunning(x[1].weak)) delete x[1].weak
         if (x[1].grow && !ns.isRunning(x[1].grow)) delete x[1].grow
-        if (!(x[1].weak2 || x[1].weak || x[1].grow)) delete runningScripts[hostname]
+        if (!(x[1].weak2 || x[1].weak || x[1].grow) && !continuePrepping) delete runningScripts[hostname]
       }
     })
 
     let hostServer = ns.getServer(host)
-    let availableRam = hostServer.maxRam - hostServer.ramUsed
+    let availableRam = (hostServer.maxRam - reserve) - hostServer.ramUsed
     let availableThreads = Math.trunc(availableRam / 1.75)
 
     let addedWeak = {}
@@ -97,10 +105,12 @@ export async function main(ns) {
     for (let i = 0; i < targets.length; i++) {
       let target = targets[i]
       if (target.hackDifficulty === target.minDifficulty && target.moneyAvailable === target.moneyMax) {
-        ns.tprint(`INFO: FINISHED prepping \x1b[38;5;207m${target.hostname}`)
-        targets = targets.slice(0, i).concat(targets.slice(i + 1))
-        targetList = targetList.slice(0, i).concat(targetList.slice(i + 1))
-        i--
+        if (!continuePrepping) {
+          ns.tprint(`INFO: FINISHED prepping \x1b[38;5;207m${target.hostname}`)
+          targets = targets.slice(0, i).concat(targets.slice(i + 1))
+          targetList = targetList.slice(0, i).concat(targetList.slice(i + 1))
+          i--
+        }
       }
     }
     
@@ -160,3 +170,9 @@ function solveGrow(growPercent, money, moneyMax) {
   const needThreads = Math.log(needFactor)/Math.log(growPercent)
   return Math.ceil(needThreads)
 }
+
+/*
+nectar-net         │ ADMIN │  16GB │  16GB │  $68.8m │ 100% │    7 │  7.0 │       │   20 │
+│ hong-fang-tea      │ ADMIN │  16GB │  16GB │  $75.0m │ 100% │    5 │  5.0 │       │   30 │
+│ harakiri-sushi  
+*/

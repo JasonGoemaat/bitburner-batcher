@@ -1,0 +1,5 @@
+1. Save location of script window - script name and location
+2. Use positino of last script window?
+3. Faction page
+  * Sort factions by name
+  

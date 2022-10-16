@@ -1,12 +1,18 @@
+const ADD_LEVELS = 5 // extra levels to calculate for hacking money to void under-growing
+
 import { createTable, getCustomFormulas } from "/lib"
 
+let myGetServer = null
+
+/** @type {HackingFormulas} */
 const hacking = getCustomFormulas()
 
 /** @param {NS} ns */
 export async function main(ns) {
+  myGetServer = name => ns.getServer(name)
   if (ns.args[0] === '--help' || ns.args[0] === '-h' || ns.args.length === 0) {
     const lines = [
-      `Usage: run ${ns.getScriptName()} <command> <target> [-- host host] [--port port] [--gb gb] [--reserve gb]`,
+      `Usage: run ${ns.getScriptName()} <command> <target> [-- host host] [--port port] [--gb gb] [--reserve gb] [--level lvl]`,
       `  command - optional, defaults to 'analyze'`,
       `      analyze - (default) analyze server(s) and report as a table`,
       `      details - analyze server(s) and report details a table`,
@@ -16,6 +22,7 @@ export async function main(ns) {
       `  port    - first port to use for communication (default 5), uses port+1 and port+2 also`,
       `  gb      - limit ram usage to gb`,
       `  reserve - reserve ram on host`,
+      `  level   - act as if player were this level for analyze (ignored for run)`
     ]
     ns.tprint('WARN:\n' + lines.join('\n'))
     if (ns.args.length > 0) return // continue if no args passed, exit if '--help' or '-h' was used
@@ -34,10 +41,15 @@ export async function main(ns) {
   let port = stripOption('port', 1)
   let gb = stripOption('gb', 0)
   let reserve = stripOption('reserve', 0)
+  let level = stripOption('level', 0)
 
   let [command, target] = args
   command = command || 'analyze'
   target = target || 'all'
+
+  if (level && command === 'run') {
+    level = 0
+  }
 
   // ns.tprint(`INFO: options is ${JSON.stringify(options)}`)
   // ns.tprint(`INFO: args is ${JSON.stringify(args)}`)
@@ -74,13 +86,27 @@ export async function main(ns) {
   // return;
 
   // perform calculations and analyze server(s)
-  const calculations = (target === 'all' || !target ? analyzeAllServers(ns, ram, cores) : [analyzeServer(ns, ram, target, cores)])
+  let calculations = (target === 'all' || !target ? analyzeAllServers(ns, ram, cores, level) : [analyzeServer(ns, ram, target, cores, level)])
+
+  //----------------------------------------------------------------------------------------------------
+  // DEBUG - add calculations for server minus 10 serverGrowth (min 1)
+  // myGetServer = name => {
+  //   let realServer = ns.getServer(name)
+  //   let fakeServer = {...realServer, serverGrowth: Math.max(1, realServer.serverGrowth - 10)}
+  //   return fakeServer
+  // }
+  // const calculations2 = (target === 'all' || !target ? analyzeAllServers(ns, ram, cores, level) : [analyzeServer(ns, ram, target, cores, level)])
+  // calculations = calculations.concat(calculations2.map(x => { return {...x, hostname: x.hostname + '-10'} }))
+  //----------------------------------------------------------------------------------------------------
+
+  
   //ns.tprint('calculations: ' + JSON.stringify(calculations))
   calculations.sort((a, b) => (b.profit || 0) - (a.profit || 0)) // highest profit first
   // ns.tprint(`Have ${calculations.length} calculations...`)
   
   // if analyzing, report as a table and return
   if (command === 'analyze' || command === 'details') {
+     ns.tprint(`INFO: host ${host}, ram ${ns.nFormat(ram, '0,000')} gb, cores ${cores}`);
     (command === 'analyze' ? report : reportDetails)(ns, calculations)
     return
   }
@@ -88,7 +114,7 @@ export async function main(ns) {
   // disable logs
   ns.disableLog('ALL')
 
-  console.log('calculations: ', calculations);
+  // DEBUG: console.log('calculations: ', calculations);
 
   var obj = eval("window['obj'] = window['obj'] || {}")
   obj.errors = []
@@ -217,22 +243,25 @@ export async function main(ns) {
   }
   batcher.kills = kills
 
-  // make sure server has been prepped, in a real script we might do this automatically
-  ns.print(`Ensuring server ${target} is ready`)
-  const ensureServerIsReady = (target) => {
-    let testServer = ns.getServer(target)
-    if (testServer.hackDifficulty !== testServer.minDifficulty || testServer.moneyAvailable !== testServer.moneyMax) {
-      ns.tprint(JSON.stringify(testServer, null, 2))
-      ns.tprint(`ERROR!  ${target} needs prepping!`)
-      ns.exit()
-    }
-  }
-  ensureServerIsReady(target)
-
-  // kill scripts on host
+  // kill scripts on host, first hack, then grow, then weaken
   while(await killScripts(ns, batcher.host)) {
     await ns.sleep(5000)
   }
+
+  // make sure server has been prepped, in a real script we might do this automatically
+  ns.print(`Ensuring server ${target} is ready`)
+  const ensureServerIsReady = async (target) => {
+    let testServer = ns.getServer(target)
+    if (testServer.hackDifficulty !== testServer.minDifficulty || testServer.moneyAvailable !== testServer.moneyMax) {
+      // ns.tprint(JSON.stringify(testServer, null, 2))
+      ns.tprint(`WARNING!  ${target} needs prepping!`)
+      ns.print(`WARNING!  ${target} needs prepping!`)
+      await prepServer(ns, host, target)
+    } else {
+      ns.print(`Server ${target} is prepped and ready`)
+    }
+  }
+  await ensureServerIsReady(target)
 
   // create port handles and clear  after killing scripts
   batcher.hResults = ns.getPortHandle(port)
@@ -467,12 +496,15 @@ export async function main(ns) {
 
   const removeOldProcessing = () => {
     let i = 0
-    let time = new Date().valueOf() - 30000 // 30 seconds late
+    let time = new Date().valueOf() - 15 * 60 * 1000 // 15 minutes late
     while (batcher.processing.length && i < batcher.processing.length && batcher.processing[i].eEnd < time) {
       i++
     }
     if (i > 0) {
       obj.errors.push({ message: `Removing ${i} processing that are 30 seconds late`, rows: batcher.processing.slice(0, i)})
+      let old = batcher.processing.slice(0, i)
+      batcher.old = batcher.old || []
+      batcher.old.push(old)
       batcher.processing = batcher.processing.slice(i)
     }
   }
@@ -548,8 +580,8 @@ export async function main(ns) {
         batcher.calculations = calculations
         batcher.hWeakenTime.clear()
         batcher.hWeakenTime.write(calculations.wTime)
-        ns.print(lines.join(', '))
-        ns.print(`INFO: hgw: ${calculations.ht}/${calculations.gt}/${calculations.wt}, active: ${batcher.counts.hack}/${batcher.counts.grow}/${batcher.counts.weak}`)
+        // ns.print(lines.join(', '))
+        ns.print(`INFO: Level ${calculations.hlvl}: hgw ${calculations.ht}/${calculations.gt}/${calculations.wt}, active ${batcher.counts.hack}/${batcher.counts.grow}/${batcher.counts.weak}`)
       } else {
         ns.print("ERROR: Cannot update calculations!\n")
         ns.exit()
@@ -681,13 +713,19 @@ export async function main(ns) {
  */
 
 
-function analyzeServer(ns, ram, hostname, cores = 1) {
+function analyzeServer(ns, ram, hostname, cores = 1, level = 0) {
   let player = ns.getPlayer()
   try {
-    let server = ns.getServer(hostname)
-    let values = calculateHGW(server, player, ram, cores, 0, 200, ns)
+    let server = myGetServer(hostname)
+    // server.minDifficulty = 5
+    let values = calculateHGW(server, player, ram, cores, 0, 200, ns, level)
+    // let sP = {...server, serverGrowth: Math.trunc(server.serverGrowth * 1.1)}
+    // let valuesP = calculateHGW(sP, player, ram, cores, 0, 200, ns, level)
+    // let sM = {...server, serverGrowth: Math.trunc(server.serverGrowth * 0.9)}
+    // let valuesM = calculateHGW(sM, player, ram, cores, 0, 200, ns, level)
     // values = null
     if (values) {
+      // return { ...values, M: valuesM?.profit, P: valuesP?.profit }
       return values
     } 
     return { hostname } // ERROR
@@ -697,7 +735,7 @@ function analyzeServer(ns, ram, hostname, cores = 1) {
   }
 }
 
-function analyzeAllServers(ns, ram, cores) {
+function analyzeAllServers(ns, ram, cores, level = 0) {
   const player = ns.getPlayer()
   const servers = {}
   const scanServer = (hostname) => {
@@ -714,7 +752,7 @@ function analyzeAllServers(ns, ram, cores) {
   list = list.filter(x => !x.purchasedByPlayer && x.hostname !== 'home' && x.moneyMax > 0 && x.requiredHackingSkill < player.skills.hacking && x.hasAdminRights)
   // list = list.slice(0, 2)
   ns.tprint(`INFO: Calculating for ${list.length} servers`)
-  let results = list.map(x => analyzeServer(ns, ram, x.hostname, cores)).filter(x => x)
+  let results = list.map(x => analyzeServer(ns, ram, x.hostname, cores, level)).filter(x => x)
   ns.tprint(`INFO: Have ${results.length} results`)
   return results
 }
@@ -739,6 +777,10 @@ function report(ns, list, useLog = false) {
         'active': x.activeHacks ? ns.nFormat(x.activeHacks, '0') : 'ERR',
         'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
         'totalGB': x.totalRam ? ns.nFormat(x.totalRam, '0,000') : 'ERR',
+        'hgw': `${x.ht}/${x.gt}/${x.wt}`,
+        // 'M': x.M ? ns.nFormat(x.M, '$0,000.00a') : 'ERR',
+        // 'P': x.P ? ns.nFormat(x.P, '$0,000.00a') : 'ERR',
+        // 'PDIFF': x.P ? ns.nFormat((x.P / x.profit) - 1, '0.00%') : 'ERR'
       }
     } catch (err) {
       ns.tprint("FORMAT ERROR: " + err)
@@ -787,6 +829,7 @@ function reportDetails(ns, list, useLog = false) {
         'grow$': x.gm ? ns.nFormat(x.gm, '$0.0a') : 'ERR',
         'chance': x.hc ? ns.nFormat(x.hc, '0.0%') : 'ERR',
         'totalGB': x.totalRam ? ns.nFormat(x.totalRam, '0,000') : 'ERR',
+        'hgw': `${x.ht}/${x.gt}/${x.wt}`,
       }
     } catch (err) {
       ns.tprint("FORMAT ERROR: " + err)
@@ -831,6 +874,7 @@ function recalculateHGW(server, player, ram, cores, calculations, ns) {
 
   if (!gt) {
     ns.tprint(`ERROR: could not solve for hack and grow threads given ${wt} weaken threads on ${server.hostname}`)
+    solveForWeakensDbg(wt, hackPercent, growPercentFn, ns)
     return null
   }
   
@@ -876,7 +920,8 @@ function recalculateHGW(server, player, ram, cores, calculations, ns) {
  * @param {number} minDelay - look for configurations with at least this delay, default 200ms
  * @param {NS} ns
  */
- function calculateHGW(server, player, ram, cores = 1, wt = 0, minDelay = 150, ns) {
+ function calculateHGW(server, player, ram, cores = 1, wt = 0, minDelay = 150, ns, level = 0) {
+  if (level) player = {...player, skills: {...player.skills, hacking: level}}
   let hlvl = player.skills.hacking
   // percent hacking with one thread
   let prepped = {...server, hackDifficulty: server.minDifficulty, moneyAvailable: server.moneyMax}
@@ -992,7 +1037,7 @@ function solveGrow(growPercent, money, moneyMax) {
   if (money >= moneyMax) { return 0; } // invalid
   const needFactor = 1 + (moneyMax - money) / money
   const needThreads = Math.log(needFactor)/Math.log(growPercent)
-  return Math.ceil(needThreads)
+  return money < needThreads * 10 ? 0 : Math.ceil(needThreads) // too little money for accuracy
 }
 
 /**
@@ -1008,6 +1053,8 @@ function solveGrow(growPercent, money, moneyMax) {
 
   while (minH <= maxH) {
     let midH = (minH + maxH) >> 1
+    let hp = midH * hackPercent
+    if (hp > 0.90) { maxH = midH - 1; continue } // don't hack over 90%
     let growPercent = growPercentFn(midH)
     let G = solveGrow(growPercent, 1e13*(1-(midH * hackPercent)), 1e13)
     // ns.tprint(`${minH}-${midH}-${maxH}: ` + JSON.stringify({ G, growPercent }))
@@ -1017,6 +1064,49 @@ function solveGrow(growPercent, money, moneyMax) {
     minH = midH + 1
   }
 
+  return { hackThreads: validH, growThreads: validG }
+}
+/**
+ * @param {number} weakenThreads - The number of weaken threads to optimize for
+ * @param {number} hackPercent - The percent hacked with one thread, adjust with fudge factor for hackChance if desired
+ * @param {function} growPercentFn - function taking hack threads and returning grow percent (i.e. 1.0025) for 1 grow thread
+ * @return {Object} Object with hackThreads and growThreads properties
+ */
+ function solveForWeakensDbg(weakenThreads, hackPercent, growPercentFn, ns) {
+  let minH = 1, maxH = weakenThreads * 24
+  let validH = 0, validG = 0
+  //ns.tprint(`Solving for weakens ${weakenThreads}, ${hackPercent}, ${growPercentFn}`)
+  let list = []
+
+  while (minH <= maxH) {
+    let midH = (minH + maxH) >> 1
+    let hp = midH * hackPercent
+    let growPercent = growPercentFn(midH)
+    let G = solveGrow(growPercent, 1e13*(1-hp), 1e13)
+    list.push({ minH, maxH, midH, G, weakenThreads, hackPercent, hp, growPercent, validH, validG })
+
+    // don't hack more than 90% of server money
+    if (hp > 0.90) {
+      maxH = midH - 1;
+      continue
+    }
+
+    // ns.tprint(`${minH}-${midH}-${maxH}: ` + JSON.stringify({ G, growPercent }))
+    if (G * 0.004 + midH * 0.002 > weakenThreads * 0.050) { maxH = midH - 1; continue }
+    validH = midH
+    validG = G
+    minH = midH + 1
+  }
+
+  let lines = createTable(list.map(x => ({
+    ht: `${x.minH}-${x.midH}-${x.maxH}`,
+    gw: `${x.G}/${x.weakenThreads}`,
+    hp: `${ns.nFormat(x.hp || 0, '0.000%')}`,
+    gp: `${ns.nFormat(x.growPercent || 0, '0.000%')}`,
+    validH: `${validH}`,
+    validG: `${validG}`,
+  })))
+  ns.tprint('solveForWeakensDbg:\n' + lines.join('\n'))
   return { hackThreads: validH, growThreads: validG }
 }
 
@@ -1138,4 +1228,91 @@ const killScripts = async (ns, host) => {
   await ns.sleep(total ? 5000 : 500)
 
   return total
+}
+
+/**
+ * @param {NS} ns
+ * @param {string} host
+ * @param {string} target
+ */
+async function prepServer(ns, host, target) {
+  ns.print(`Prepping ${target} using ${host}`)
+  let weakScript = `/** @param {NS} ns */
+  export async function main(ns) {
+    const [target] = ns.args
+    await ns.weaken(target)
+  }`
+  let growScript = `/** @param {NS} ns */
+  export async function main(ns) {
+    const [target] = ns.args
+    await ns.grow(target)
+  }`
+  ns.write(`/var/tmp/hgw-prep-weak.js`, weakScript, 'w')
+  ns.write(`/var/tmp/hgw-prep-grow.js`, growScript, 'w')
+  if (host !== ns.getHostname()) {
+    ns.rm(`/var/tmp/hgw-prep-weak.js`, host)
+    ns.rm(`/var/tmp/hgw-prep-grow.js`, host)
+    await ns.scp(`/var/tmp/hgw-prep-weak.js`, host)
+    await ns.scp(`/var/tmp/hgw-prep-grow.js`, host)
+  }
+
+  let server = ns.getServer(target)
+  let player = ns.getPlayer()
+  while (server.hackDifficulty > server.minDifficulty || server.moneyAvailable < server.moneyMax) {
+    let hostS = ns.getServer(host)
+    let availableRam = hostS.maxRam - hostS.ramUsed - (host === 'home' ? 16 : 0)
+    let availableThreads = Math.floor(availableRam / 1.75)
+    let wTime = hacking.weakenTime(server, player)
+    let done = new Date(new Date().valueOf() + wTime).toLocaleTimeString()
+    ns.print(`Performing one cycle - done at ${done}`)
+
+    let { gt, wt, totalWt, totalT } = calcPrep(ns, server, hostS.cpuCores)
+    if (totalT > availableThreads) {
+      let partial = Math.min(wt, availableThreads)
+      let remaining = availableThreads - partial
+      let full = Math.trunc(remaining / 27) // 2 grow, 25 weaken
+      wt += 2 * full
+      gt += 25 * full
+      remaining -= full * 27
+      wt += Math.min(remaining, 2)
+      gt += Math.max(0, remaining - 2)
+    }
+
+    ns.print('INFO: ' + JSON.stringify({ gt, wt, availableThreads, gp, diff: server.hackDifficulty - server.minDifficulty, '$': server.moneyMax - server.moneyAvailable}, null, 2))
+    let pids = []
+    if (wt) {
+      pids[0] = ns.exec(`/var/tmp/hgw-prep-weak.js`, host, wt, target, wt)
+      ns.print(`Weaking ${target} using ${wt} threads on ${host} - pid ${pids[0]}`)
+    }
+    if (gt) {
+      pids[1] = ns.exec(`/var/tmp/hgw-prep-grow.js`, host, gt, target, gt)
+      ns.print(`Growing ${target} using ${gt} threads on ${host} - pid ${pids[1]} (need ${calcGt - gt} after)`)
+    }
+    if (!(gt || wt)) {
+      ns.print(`prepping doesn't need any threads?!?!  ${server.hackDifficulty - server.minDifficulty}, ${server.moneyMax - server.moneyAvailable}`)
+      break;
+    }
+    await ns.sleep(hacking.weakenTime(server, player))
+    while (ns.ps(host).filter(x => x.pid === pids[0] || x.pid === pids[1]).length) {
+      await ns.sleep(1000)
+    }
+    server = ns.getServer(target)
+    player = ns.getPlayer()
+  }
+  ns.print(`Done prepping...`)
+}
+
+/**
+ * @param {NS} ns
+ * @param {string | Server} hostname
+ */
+function calcPrep(ns, server, cores = 1) {
+  if (typeof(server) === 'string') server = ns.getServer(server)
+  let player = ns.getPlayer()
+  let gp = hacking.growPercent(server, 1, player, cores)
+  let gt = Math.ceil(solveGrow(gp, server.moneyAvailable, server.moneyMax))
+  let wt = Math.ceil((server.hackDifficulty - server.minDifficulty) * 0.050)
+  let totalWt = Math.ceil((server.hackDifficulty - server.minDifficulty) * 0.050 + gt * 0.004)
+  let totalT = totalWt + gt
+  return { gt, wt, totalWt, totalT, gp }
 }

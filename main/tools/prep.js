@@ -30,11 +30,17 @@ export async function main(ns) {
 
   for (let i = 0; i < targetList.length; i++) {
     const target = targetList[i]
+    let server = ns.getServer(target)
+
+    if (!server.hasAdminRights) {
+      ns.tprint(`WARNING: you do not have ADMIN rights on ${target}`)
+      continue
+    }
+
     ns.tprint(`INFO: prep target: ${target}`)
     ns.print(`INFO: prep target: ${target}`)
 
-
-    let server = ns.getServer(target)
+    let s = ns.getServer(host)
     while (server.hackDifficulty > server.minDifficulty || server.moneyAvailable < server.moneyMax) {
       let hostServer = ns.getServer(host)
       let availableRam = hostServer.maxRam - hostServer.ramUsed
@@ -78,6 +84,7 @@ export async function main(ns) {
           await ns.sleep(500 + weakenTime)
         } else {
           ns.print(`INFO: Done with ${target}`)
+          ns.tprint(`INFO: Done with ${target} at ${finish}`)
           break // next server
         }
       }
