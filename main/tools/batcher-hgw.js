@@ -509,7 +509,7 @@ export async function main(ns) {
     }
   }
 
-  const REPORT_DELAY = 300000
+  const REPORT_DELAY = 1 * 60 * 1000 // 1 minute
   const createResultReporter = () => {
     let lastReport = new Date().valueOf()
     return (data) => {
@@ -1267,6 +1267,7 @@ async function prepServer(ns, host, target) {
     ns.print(`Performing one cycle - done at ${done}`)
 
     let { gt, wt, totalWt, totalT } = calcPrep(ns, server, hostS.cpuCores)
+    let calcGt = gt
     if (totalT > availableThreads) {
       let partial = Math.min(wt, availableThreads)
       let remaining = availableThreads - partial
@@ -1276,16 +1277,18 @@ async function prepServer(ns, host, target) {
       remaining -= full * 27
       wt += Math.min(remaining, 2)
       gt += Math.max(0, remaining - 2)
+    } else {
+      wt = totalWt
     }
 
-    ns.print('INFO: ' + JSON.stringify({ gt, wt, availableThreads, gp, diff: server.hackDifficulty - server.minDifficulty, '$': server.moneyMax - server.moneyAvailable}, null, 2))
+    ns.print('INFO: ' + JSON.stringify({ gt, wt, availableThreads, diff: server.hackDifficulty - server.minDifficulty, '$': server.moneyMax - server.moneyAvailable}, null, 2))
     let pids = []
     if (wt) {
-      pids[0] = ns.exec(`/var/tmp/hgw-prep-weak.js`, host, wt, target, wt)
+      pids[0] = ns.exec(`/var/tmp/hgw-prep-weak.js`, host, wt, target, wt, new Date().valueOf())
       ns.print(`Weaking ${target} using ${wt} threads on ${host} - pid ${pids[0]}`)
     }
     if (gt) {
-      pids[1] = ns.exec(`/var/tmp/hgw-prep-grow.js`, host, gt, target, gt)
+      pids[1] = ns.exec(`/var/tmp/hgw-prep-grow.js`, host, gt, target, gt, new Date().valueOf())
       ns.print(`Growing ${target} using ${gt} threads on ${host} - pid ${pids[1]} (need ${calcGt - gt} after)`)
     }
     if (!(gt || wt)) {
@@ -1311,8 +1314,8 @@ function calcPrep(ns, server, cores = 1) {
   let player = ns.getPlayer()
   let gp = hacking.growPercent(server, 1, player, cores)
   let gt = Math.ceil(solveGrow(gp, server.moneyAvailable, server.moneyMax))
-  let wt = Math.ceil((server.hackDifficulty - server.minDifficulty) * 0.050)
-  let totalWt = Math.ceil((server.hackDifficulty - server.minDifficulty) * 0.050 + gt * 0.004)
+  let wt = Math.ceil((server.hackDifficulty - server.minDifficulty) / 0.050)
+  let totalWt = Math.ceil(wt + gt * 0.004 / 0.050)
   let totalT = totalWt + gt
   return { gt, wt, totalWt, totalT, gp }
 }
