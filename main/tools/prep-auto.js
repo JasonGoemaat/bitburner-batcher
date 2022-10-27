@@ -102,6 +102,7 @@ export async function main(ns) {
       ns.tprint('WARNING: We have finished prepping!')
       break;
     }
+
     for (let i = 0; i < targets.length; i++) {
       let target = targets[i]
       if (target.hackDifficulty === target.minDifficulty && target.moneyAvailable === target.moneyMax) {
@@ -141,7 +142,7 @@ export async function main(ns) {
         let growTime = hacking.growTime(target, player)
         let growPercent = hacking.growPercent(target, 1, player, hostServer.cpuCores)
         let gt = solveGrow(growPercent, target.moneyAvailable, target.moneyMax)
-        gt = Math.min(gt, Math.ceil(availableThreads / 13.5) * 12)
+        gt = Math.min(gt, Math.trunc(availableThreads / 13.5) * 12)
         let wt = Math.ceil(gt * 0.004 / 0.050)
         if (gt) {
           const now = new Date(new Date().valueOf()).toLocaleTimeString()
@@ -164,7 +165,23 @@ export async function main(ns) {
   }
 }
 
-function solveGrow(growPercent, money, moneyMax) {
+
+function solveGrow(base, money_lo, money_hi) {
+  if (money_lo >= money_hi) { return 0; }
+
+  let threads = 1000;
+  let prev = threads;
+  for (let i = 0; i < 30; ++i) {
+    let factor = money_hi / Math.min(money_lo + threads, money_hi - 1);
+    threads = Math.log(factor) / Math.log(base);
+    if (Math.ceil(threads) == Math.ceil(prev)) { break; }
+    prev = threads;
+  }
+
+  return Math.ceil(Math.max(threads, prev, 0));
+}
+
+function solveGrowMine(growPercent, money, moneyMax) {
   if (money >= moneyMax) { return 0; } // invalid
   const needFactor = 1 + (moneyMax - money) / money
   const needThreads = Math.log(needFactor)/Math.log(growPercent)

@@ -1,3 +1,8 @@
+// args: <host> <target> [reserveGb]
+// host is the computer the scripts will run on
+// target is the computer the scripts will target
+// reserveGb is optional and will reserve this much memory on the server
+
 import { getCustomFormulas } from "/lib"
 
 const hacking = getCustomFormulas()
@@ -5,7 +10,8 @@ const hacking = getCustomFormulas()
 /** @param {NS} ns */
 export async function main(ns) {
 
-  let [host, target] = ns.args
+  let [host, target, reserveGb] = ns.args
+  reserveGb = Math.max(0, reserveGb || 0)
   host = host || 'grinder' // buy a 1pb server
   target = target || 'n00dles'
   let server = ns.getServer(target)
@@ -61,9 +67,9 @@ export async function main(ns) {
 
   finish = new Date(new Date().valueOf() + hackTime)
   ns.print(`Starting hacks...  First complete in ${ns.nFormat(hackTime / 1000, '0,000.0')} sec at ${finish.toLocaleTimeString()}`)
-  let hackThreads = (ns.getServerMaxRam(host) - ns.getServerUsedRam(host)) / 1.7
-  if (host === 'home') hackThreads -= 100
-  pids.push(ns.exec(hackScript, host, hackThreads, target, 0))
+  if (host === 'home') reserveGb = 65536
+  let hackThreads = (ns.getServerMaxRam(host) - ns.getServerUsedRam(host) - reserveGb) / 1.7
+  if (hackThreads > 0) pids.push(ns.exec(hackScript, host, hackThreads, target, 0))
   await ns.sleep(hackTime + 1000)
   
   // DEBUG: This doesn't work, it thinks tprint is a concurrent call to a netscript functino
@@ -76,6 +82,6 @@ export async function main(ns) {
   while (true) {
     let xpGain = ns.getScriptExpGain(hackScript, host, target, 0)
     ns.print(`${new Date().toLocaleTimeString()}: ${ns.nFormat(xpGain || 0, '0.000a')}`)
-    await ns.sleep(60000)
+    await ns.sleep(60000) // report every minute
   }
 }

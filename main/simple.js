@@ -10,23 +10,37 @@ const black = '\x1b[30m', red = '\x1b[31m', green = '\x1b[32m', yellow = '\x1b[3
 
 /** @param {NS} ns */
 export async function main(ns) {
-	let [target, runners, threads] = ns.args
-
-  ns.write('/remote/simple.js', `/** @param {NS} ns */
-  export async function main(ns) {
-    let [target, targetDifficulty, targetMoney, hackThreads] = ns.args
-    if ((!target) || (!targetDifficulty) || (!targetMoney)) { ns.tprint('ERROR: simple.js requires target, targetDifficulty, and targetMoney'); return; }
+	let [target, runners] = ns.args
   
-    while(true) {
-      if (await ns.getServerSecurityLevel(target) > targetDifficulty + Math.random() * 2) {
-         await ns.weaken(target)
-      } else if (ns.getServerMoneyAvailable(target) < targetMoney - targetMoney * Math.random() * 0.1) {
-         await ns.grow(target)
-      } else {
-         await ns.hack(target, { threads: hackThreads})
+  let simple = eval('window.simple = window.simple || {}')
+  if (simple.quit) {
+    simple.quit()
+  }
+  simple.write = ns.write
+  simple.read = ns.read
+  simple.getServer = ns.getServer
+  simple.rm = ns.rm
+  simple.scp = ns.scp // careful with this one, it requires await
+
+  if (!ns.fileExists('/remote/simple.js')) {
+    ns.write('/remote/simple.js', `/** @param {NS} ns */
+    export async function main(ns) {
+      let simple = eval('window.simple')
+      let [target, targetDifficulty, targetMoney, hackThreads] = ns.args
+      if ((!target) || (!targetDifficulty) || (!targetMoney)) { ns.tprint('ERROR: simple.js requires target, targetDifficulty, and targetMoney'); return; }
+    
+      while(true) {
+        let server = simple['getServer'](target)
+        if (server.hackDifficulty > server.minDifficulty + Math.random() * 2) {
+          await ns.weaken(target)
+        } else if (server.moneyAvailable < targetMoney - targetMoney * Math.random() * 0.1) {
+          await ns.grow(target)
+        } else {
+          await ns.hack(target, { threads: hackThreads})
+        }
       }
-    }
-  }`, 'w')
+    }`, 'w')
+  }
 
   if (!target || !runners) { ns.tprint('ERROR: simple.js requires target and at least one runner'); return; }
   ns.tprint('INFO: runners: ', runners)
@@ -58,18 +72,21 @@ export async function main(ns) {
 
     const scriptRam = ns.getScriptRam(SCRIPT, runner)
     const availableRam = ns.getServerMaxRam(runner) - ns.getServerUsedRam(runner)
-    let useThreads = threads || Math.trunc(availableRam / scriptRam)
+    let useThreads = Math.trunc(availableRam / scriptRam)
     let maxThreads = Math.max(1, Math.min(useThreads, Math.floor(1 / hp / 3)))
     const targetMoney = Math.trunc((await ns.getServerMaxMoney(target)) * 0.95)
     const targetDifficulty = (await ns.getServerMinSecurityLevel(target)) + 2
 
-    ns.print(JSON.stringify({ runner, hp, threads, maxThreads }))
+    ns.print(JSON.stringify({ runner, hp, useThreads, maxThreads }))
 
     if (useThreads < 1) {
       ns.tprint(`WARNING: ${cyan}${runner}${white} has no ram available`)
     } else {
-      ns.tprint(`${white}Running ${maxThreads} threads on ${cyan}${runner}${white} targeting ${cyan}${target}`)
-      ns.exec(SCRIPT, runner, useThreads, target, targetDifficulty, targetMoney, maxThreads)
+      ns.tprint(`${white}Running ${useThreads} threads on ${cyan}${runner}${white} targeting ${cyan}${target}`)
+      ns.exec(SCRIPT, runner, useThreads, target, targetDifficulty, targetMoney, useThreads)
     }
   }
+
+  let promise = new Promise(resolve => simple.quit = resolve);
+  await promise
 }

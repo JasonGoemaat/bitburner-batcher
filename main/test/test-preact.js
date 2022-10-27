@@ -4,7 +4,7 @@ async function main(ns) {
  
   var win, doc;
 
-  win = window.open('', 'dialog', opts);
+  win = window.open('', 'dialog', {});
   doc = win.document;
   
   doc.write(

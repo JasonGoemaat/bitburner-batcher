@@ -1,3 +1,5 @@
+// Thanks @Zoekeeper on discord for the idea
+
 /** @param {NS} ns */
 export async function main(ns) {
   /** @type {Object[]} */

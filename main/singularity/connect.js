@@ -1,14 +1,8 @@
 import { createTable, getOptions } from '/lib'
 
 const defaultOptions = [
-  ['--help'       , null, '--help             - display usage'],
-  ['--t'          , null, '--t                - open tail window isntead of using terminal'],
-  ['--push-remote', null, '--push-remote      - push files in /remote to all servers'],
-  ['--nohack'     , null, '--nohack           - do not hack servers'],
-  ['--connect'    , ''  , '--connect <server> - connect to server'],
-  ['--ram'        , 0   , '--ram <count>      - display top <count> servers by ram'],
-  ['--hack'       , 0   , '--hack <count>     - display top <count> servers by theoretical profit'],
-  ['--open'       , null, '--open             - displays in new window instead of terminal']
+  ['--help'       , null, '--help     - display usage'],
+  ['--backdoor'   , null, '--backdoor - backdoor after connecting']
 ]
 
 /** @param {NS} ns */
@@ -28,11 +22,6 @@ export async function main(ns) {
     myprint = ns.print
   }
 
-  // find apps on home for hacking
-	let homeApps = ns.ls('home', '.exe').reduce((p, c) => { p[c] = true; return p }, {})
-
-  const remoteFiles = options['push-remote'] ? ns.ls('home', 'remote/') : []
-
   //----------------------------------------------------------------------------------------------------
   // scan all servers
   //----------------------------------------------------------------------------------------------------
@@ -49,57 +38,6 @@ export async function main(ns) {
     })
   }
   scanServer('home')
-
-  //----------------------------------------------------------------------------------------------------
-  // root servers if we can
-  //----------------------------------------------------------------------------------------------------
-
-  const hackServers = async () => {
-    /** @type {Server[]} */
-    const unhackedServers = Object.values(servers).filter(x => !x.hasAdminRights)
-    for (let i = 0; i < unhackedServers.length; i++) {
-      let server = unhackedServers[i]
-      if (!server.sshPortOpen && homeApps['BruteSSH.exe']) { ns.brutessh(server.hostname); await ns.sleep(10) }
-      if (!server.ftpPortOpen && homeApps['FTPCrack.exe']) { ns.ftpcrack(server.hostname); await ns.sleep(10) }
-      if (!server.smtpPortOpen && homeApps['relaySMTP.exe']) { ns.relaysmtp(server.hostname); await ns.sleep(10) }
-      if (!server.httpPortOpen && homeApps['HTTPWorm.exe']) { ns.httpworm(server.hostname); await ns.sleep(10) }
-      if (!server.sqlPortOpen && homeApps['SQLInject.exe']) { ns.sqlinject(server.hostname); await ns.sleep(10) }
-      server = Object.assign(server, ns.getServer(server.hostname))
-      if (server.openPortCount >= server.numOpenPortsRequired) {
-        ns.nuke(server.hostname)
-        server = Object.assign(server, ns.getServer(server.hostname))
-        await ns.sleep(100)
-      }
-      servers[server.hostname] = server
-      await ns.sleep(10)
-    }
-  }
-  if (!options.nohack) await hackServers()
-
-  //----------------------------------------------------------------------------------------------------
-  // --push-remote - copy remote files to servers if we have admin rights and they have ram
-  //----------------------------------------------------------------------------------------------------
-
-  const copyFilesToRemote = async () => {
-    let list = Object.values(servers)
-    for(let i = 0; i < list.length; i++) {
-      let server = list[i]
-      if (server.hostname !== 'home' && server.hasAdminRights && server.maxRam > 0) {
-        let serverFiles = ns.ls(server.hostname)
-        for (let j = 0; j < remoteFiles.length; j++) {
-          let remoteFile = remoteFiles[j]
-          if (serverFiles.indexOf(remoteFile) < 0) {
-            await ns.scp(remoteFile, server.hostname, 'home')
-            await ns.sleep(100)
-          }
-        }
-      }
-      await ns.sleep(10)
-    }
-  }
-  // await copyFilesToRemote() // don't need this now, my batchers copy their own files
-
-  let player = ns.getPlayer()
 
   //----------------------------------------------------------------------------------------------------
   // Connect to passed server, finding path

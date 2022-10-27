@@ -45,13 +45,13 @@ export async function main(ns) {
 			if (current.length === 0) {
 				ns.tprint('  You do not own any servers')
 			} else {
-				current.forEach(x => {
+				current.forEach((x, index) => {
 					let hostname = `${x.hostname}`.padEnd(20)
 					let maxRam = ns.nFormat(x.maxRam * 1e9, '0,000.0b')
 					let usedRam = ns.nFormat(Math.ceil(x.ramUsed) * 1e9, '0,000.0b')
           let freeRam = ns.nFormat(Math.floor(x.maxRam - x.ramUsed) * 1e9, '0,000.0b')
 					let ramStr = `${usedRam}/${maxRam} used, free: ${freeRam}`.padEnd(16)
-					ns.tprint(`  ${hostname} ${ramStr}`)
+					ns.tprint(`  ${('' + index).padStart(3, ' ')} ${hostname} ${ramStr}`)
 				})
 			}
 			let min = 0, max = options.length - 1

@@ -20,11 +20,11 @@ export async function main(ns) {
     scanServer('home')
     runnable = Object.values(servers).filter(x => x.hasAdminRights && x.maxRam > 0 && x.hostname !== 'home').concat([{ hostname: 'home' }])
   }
+  ns.tprint(`Command: '${command}, Hosts: ${runnable.map(x => x.hostname).join(', ')}`)
 
 	runnable.forEach(x => {
 		if (typeof(command) === 'string' && command.length > 0 && command !== 'all') {
 			var list = ns.ps(x.hostname)
-      let start = performance.now()
       let count = 0
 			list.forEach(info => {
 				if (info.filename.indexOf(command) >= 0 || JSON.stringify(info.args).indexOf(command) >= 0) {
@@ -32,9 +32,10 @@ export async function main(ns) {
 					ns.kill(info.pid, x.hostname)
 				}
 			})
-      let end = performance.now()
-      if (count) ns.tprint(`Killed ${count} scripts on ${x.hostname} in ${ns.nFormat(end - start, '0.000')} ms`)
+      if (count) ns.tprint(`${x.hostname}: killed ${count} scripts`)
+      // ns.tprint(` - other - ${x.hostname}: killed ${count} scripts`)
 		} else {
+      ns.tprint(`${x.hostname}: killing all`)
 			ns.killall(x.hostname)
 		}
 	})

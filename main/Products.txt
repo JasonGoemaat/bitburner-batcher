@@ -1,0 +1,184 @@
+Different products care about different things for their ratings
+
+This calculates the rating given an industry in src/Corporation/Product.ts
+
+    calculateRating(industry: Industry): void {
+      const weights: IProductRatingWeight = ProductRatingWeights[industry.type];
+      if (weights == null) {
+        console.error(`Could not find product rating weights for: ${industry}`);
+        return;
+      }
+      this.rat = 0;
+      this.rat += weights.Quality ? this.qlt * weights.Quality : 0;
+      this.rat += weights.Performance ? this.per * weights.Performance : 0;
+      this.rat += weights.Durability ? this.dur * weights.Durability : 0;
+      this.rat += weights.Reliability ? this.rel * weights.Reliability : 0;
+      this.rat += weights.Aesthetics ? this.aes * weights.Aesthetics : 0;
+      this.rat += weights.Features ? this.fea * weights.Features : 0;
+    }
+
+And the weights are in src/Corporation/Industry.ts
+
+    export const ProductRatingWeights: Record<string, IProductRatingWeight> = {
+      [Industries.Food]: {
+        Quality: 0.7,
+        Durability: 0.1,
+        Aesthetics: 0.2,
+      },
+      [Industries.Tobacco]: {
+        Quality: 0.4,
+        Durability: 0.2,
+        Reliability: 0.2,
+        Aesthetics: 0.2,
+      },
+      [Industries.Pharmaceutical]: {
+        Quality: 0.2,
+        Performance: 0.2,
+        Durability: 0.1,
+        Reliability: 0.3,
+        Features: 0.2,
+      },
+      [Industries.Computer]: {
+        Quality: 0.15,
+        Performance: 0.25,
+        Durability: 0.25,
+        Reliability: 0.2,
+        Aesthetics: 0.05,
+        Features: 0.1,
+      },
+      Computer: {
+        //Repeat
+        Quality: 0.15,
+        Performance: 0.25,
+        Durability: 0.25,
+        Reliability: 0.2,
+        Aesthetics: 0.05,
+        Features: 0.1,
+      },
+      [Industries.Robotics]: {
+        Quality: 0.1,
+        Performance: 0.2,
+        Durability: 0.2,
+        Reliability: 0.2,
+        Aesthetics: 0.1,
+        Features: 0.2,
+      },
+      [Industries.Software]: {
+        Quality: 0.2,
+        Performance: 0.2,
+        Reliability: 0.2,
+        Durability: 0.2,
+        Features: 0.2,
+      },
+      [Industries.Healthcare]: {
+        Quality: 0.4,
+        Performance: 0.1,
+        Durability: 0.1,
+        Reliability: 0.3,
+        Features: 0.1,
+      },
+      [Industries.RealEstate]: {
+        Quality: 0.2,
+        Durability: 0.25,
+        Reliability: 0.1,
+        Aesthetics: 0.35,
+        Features: 0.1,
+      },
+    };
+
+In Product.ts, this sets the properties based on the number of employees and various factors:
+
+    this.qlt =
+      totalMult *
+      (0.1 * this.creationProd[EmployeePositions.Engineer] +
+        0.05 * this.creationProd[EmployeePositions.Management] +
+        0.05 * this.creationProd[EmployeePositions.RandD] +
+        0.02 * this.creationProd[EmployeePositions.Operations] +
+        0.02 * this.creationProd[EmployeePositions.Business]);
+    this.per =
+      totalMult *
+      (0.15 * this.creationProd[EmployeePositions.Engineer] +
+        0.02 * this.creationProd[EmployeePositions.Management] +
+        0.02 * this.creationProd[EmployeePositions.RandD] +
+        0.02 * this.creationProd[EmployeePositions.Operations] +
+        0.02 * this.creationProd[EmployeePositions.Business]);
+    this.dur =
+      totalMult *
+      (0.05 * this.creationProd[EmployeePositions.Engineer] +
+        0.02 * this.creationProd[EmployeePositions.Management] +
+        0.08 * this.creationProd[EmployeePositions.RandD] +
+        0.05 * this.creationProd[EmployeePositions.Operations] +
+        0.05 * this.creationProd[EmployeePositions.Business]);
+    this.rel =
+      totalMult *
+      (0.02 * this.creationProd[EmployeePositions.Engineer] +
+        0.08 * this.creationProd[EmployeePositions.Management] +
+        0.02 * this.creationProd[EmployeePositions.RandD] +
+        0.05 * this.creationProd[EmployeePositions.Operations] +
+        0.08 * this.creationProd[EmployeePositions.Business]);
+    this.aes =
+      totalMult *
+      (0.0 * this.creationProd[EmployeePositions.Engineer] +
+        0.08 * this.creationProd[EmployeePositions.Management] +
+        0.05 * this.creationProd[EmployeePositions.RandD] +
+        0.02 * this.creationProd[EmployeePositions.Operations] +
+        0.1 * this.creationProd[EmployeePositions.Business]);
+    this.fea =
+      totalMult *
+      (0.08 * this.creationProd[EmployeePositions.Engineer] +
+        0.05 * this.creationProd[EmployeePositions.Management] +
+        0.02 * this.creationProd[EmployeePositions.RandD] +
+        0.05 * this.creationProd[EmployeePositions.Operations] +
+        0.05 * this.creationProd[EmployeePositions.Business]);
+
+So my Tobacco makes the most for a given product with the same amount invested, and even fewer employees:
+
+    Tobacco: 7.443e+96 (10.6m with 8.524m + 42.618m materials), 424m research
+    Pharmaceutical: 2.598e+87 (8.86m with 26m + 52m materials), 444m research
+    Computer: 8.753e+86 (8.59m with 50m + 100m materials), 444m research
+    Software: 9.635e+83 (33.9m with 2x100.2m materials), 404m research
+
+Let's see how much I can improve Software which is the lowest by far (1/1000th next but 4x produced, 1/10trillion the max).
+Software is a pretty even mix:
+
+    Quality: 0.2,
+    Performance: 0.2,
+    Reliability: 0.2,
+    Durability: 0.2,
+    Features: 0.2,
+
+So we can just look at the multipliers for each by employees and count
+
+            qua  per   rel   dur   fea
+Engineer  : 0.1, 0.15, 0.02, 0.05, 0.08 = 0.40 - 16%
+Management: 0.5, 0.02, 0.08, 0.02, 0.05 = 0.67 - 27%
+RandD     : 0.5, 0.02, 0.02, 0.08, 0.02 = 0.64 - 26%
+Operations: 0.2, 0.02, 0.05, 0.05, 0.05 = 0.37 - 15%
+Business  : 0.2, 0.02, 0.08, 0.05, 0.05 = 0.40 - 16%
+Totals    : 1.5, 0.95, 0.25, 0.25, 0.25
+
+So the two most important are management and RandD, being 70% more effective than others.
+So let's try reflecting that by dividing employees by 7 and giving management and RandD double shares
+4095 employees / 7 is 585 each, 1170 in management and randd
+Using 1e107 for the funding for both advertising and development
+
+Ok, so price actually went up by a factor of 1.2, but not that much
+Software: 9.635e+83 (33.9m with 2x100.2m materials), 404m research
+
+It comes down to office.employeeProd[emptype] which is calculated in OfficeSpace.ts in calculateEmployeeProductivity()
+That calls Employee.calculateProductivity, which varies like so:
+
+      Operations: prodMult = 0.6 * effInt + 0.1 * effCha + 1.0 * this.exp + 0.5 * effCre + 1.0 * effEff;
+      Engineer  : prodMult = 1.0 * effInt + 0.1 * effCha + 1.5 * this.exp + 0.0 * effCre + 1.0 * effEff;
+      Business  : prodMult = 0.4 * effInt + 1.0 * effCha + 0.5 * this.exp + 0.0 * effCre + 0.0 * effEff;
+      Management: prodMult = 0.0 * effInt + 2.0 * effCha + 1.0 * this.exp + 0.2 * effCre + 0.7 * effEff;
+      RandD     : prodMult = 1.5 * effInt + 0.0 * effCha + 0.8 * this.exp + 1.0 * effCre + 0.5 * effEff;
+
+Interesting...  So I could take these numbers based on employee stats, multiplied by effect above (15, 16, 26, or 27 percent),
+and assign all employees to the place where they will actually be most effective...  Possibly :)
+I think the results by each factor are additive and not multiplied, i.e. all the individual 'rating' parts
+for software are * 0.02 and added together.  Let me look at re-arranging employees.  Those 'eff' values
+are multiplied by modifiers for corporations (i.e. 'Neural Accelerators level) and the indistry modifiers
+(i.e. CPH4 which increases all stats but experience by 10%).
+
+Note: EXPERIENCE is also a factor here and could play a big factor for more experience employees...
