@@ -68,7 +68,7 @@ export async function main(ns) {
         let buyCommand = `buy <hostname> ${options[i].gb}`
         if (i === maxIndex) buyCommand += '  <--- Max Affordable'
         let gb = `${options[i].gb}`
-				ns.tprint(`  ${gb.padStart(8)}GB for ${ns.nFormat(options[i].cost, '$0,000.0a').padStart(7)} - ${buyCommand}`)
+				ns.tprint(`${i === maxIndex ? 'INFO:' : '     '} ${gb.padStart(8)}GB for ${ns.nFormat(options[i].cost, '$0,000.0a').padStart(7)} - ${buyCommand}`)
 			}
 			break;
 		case 'delete':

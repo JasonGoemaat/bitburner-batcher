@@ -4,10 +4,10 @@
 //    1. add 'waitFrames' to main loop for transition from init -> play
 //    2. fix last 'nice' guard string from 'based' to 'straightforward'
 //    3. increase speed from 22 to 30
+//    4. Added --auto option, will repeat hacking the same company
+//    5. Added --faction <faction> option, will accept faction rep for #4 instead of money
 // TODO:
 //    1. Fix some that were failing with augments from Shadows of Anarchy
-//    2. Add automatic re-running of infiltrations (trigger on F9 in city screen?  disable with any click or trusted keypress or F9 again?)
-//    3. Add options to allow auto-faction rep for #2?
 
 const state = {
   // Name of the company that's infiltrated.
@@ -120,10 +120,13 @@ const infiltrationGames = [
       state.game.waitFrames = 45
     },
     play: function (screen) {
-      const data = getLines(getEl(screen, "h4"));
+      const data = getLines(getEl(screen, "h4")).join('\n');
 
       const compareString = "ATTACKING!"
-      if ('wait' === state.game.data && -1 !== data.indexOf(compareString)) {
+      const compareString2 = "Preparing?"
+      const shouldPress = data.indexOf(compareString) >= 0 || data.indexOf(compareString2) >= 0
+      wnd.lastSlashInfo = { data }
+      if ('wait' === state.game.data && (data.indexOf(compareString) + data.indexOf(compareString2) > -2)) {
         pressKey(" ")
         state.game.data = "done"
       }
@@ -834,76 +837,17 @@ function unwrapEventListeners() {
 
 
 /*================================================================================
-
---------------------------------------------------------------------------------
--- City screen - select company (choose looking for one in each city?)
-
-On city select string, look for this:
-  
-    <span aria-label="MegaCorp" class="makeStyles-location-127"><b>C</b></span>
-
-Run 'click()' on the span
-
---------------------------------------------------------------------------------
--- City screen - Infiltrate button
-
-Look for element like this with text 'Infiltrate Company':
-
-    <button class="MuiButtonBase-root MuiButton-root MuiButton-text MuiButton-textPrimary MuiButton-sizeMedium MuiButton-textSizeMedium MuiButton-root MuiButton-text MuiButton-textPrimary MuiButton-sizeMedium MuiButton-textSizeMedium css-to9fph-MuiButtonBase-root-MuiButton-root" tabindex="0" type="button">Infiltrate Company<span class="MuiTouchRipple-root css-8je8zh-MuiTouchRipple-root"></span></button>
-
-click() doesn't seem to work, maybe tru this from casino script?
-
-  // Some DOM helpers (partial credit to @ShamesBond)
-  async function click(elem) {
-    await elem[Object.keys(elem)[1]].onClick({ isTrusted: true });
-    if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
-  }
-
-Yes, Beautiful!  this works with button element stored as global var in chrome devtools:
-
-    temp2[Object.keys(temp2)[1]].onClick({ isTrusted: true })
-
---------------------------------------------------------------------------------
--- End (SELL FOR MONEY)
-
-After successful infiltration, look for button with text 'Sell for' or 'Trade for':
-
-    Array.from(document.querySelectorAll('button')).find(x => x.innerText.indexOf('Sell for') >= 0)
-
---------------------------------------------------------------------------------
--- End (TRADE FOR REPUTATION)
-
-For trade, you first need to click on this:
-
-    Array.from(document.querySelectorAll('role="button" aria-haspopup="listbox"')).find(x => x.innerText.indexOf('none') >= 0)
-
-    <div tabindex="0" role="button" aria-expanded="false" aria-haspopup="listbox" class="MuiSelect-select MuiSelect-standard MuiInputBase-input MuiInput-input css-5kufk4-MuiSelect-select-MuiInputBase-input-MuiInput-input">none</div>
-
-BOOM!
-
-    var e = Array.from(document.querySelectorAll('[role="button"]')).find(x => x.innerText.indexOf('none') >= 0);
-    e[Object.keys(e)[1]].onKeyDown(new KeyboardEvent('keydown', {'key': ' '}));
-
-Then, maybe wait some ms for the pop-up list to show, then this to get an array:
-
-    var e2 = Array.from(document.querySelectorAll('li[role="option"]')).find(x => x.innerText.indexOf('Sector-12') >= 0)
-
-Then just e2.click() works:
-
-    var e2 = Array.from(document.querySelectorAll('li[role="option"]')).find(x => x.innerText.indexOf('Sector-12') >= 0)
-
-*/
+  = Auto Mode
+  ================================================================================*/
 
 /**
- * Select a company and begin infiltration for auto mode, should only get here
- * after acceptMoney() or acceptReputation(), or on failure I guess
+ * Select a company and begin infiltration for auto mode
  */
 function selectCompany() {
   if (!auto) return
   cancelMyTimeout()
 
   postTimeout = setTimeout(() => {
-    // console.info('selectCompany()')
     postTimeout = null
 
     var selector = 'span[aria-label="' + state.lastCompany + '"]'
@@ -914,17 +858,16 @@ function selectCompany() {
         infiltrationStart = 0
       }
       companyEle.click()
-      // console.log('Clicked on company selector element')
       postTimeout = setTimeout(() => {
         postTimeout = null
         var btn = Array.from(doc.querySelectorAll('button')).find(x => x.innerText.indexOf('Infiltrate Company') >= 0)
         if (btn) btn[Object.keys(btn)[1]].onClick({ isTrusted: true })
-        // console.log('Clicked on "Infiltrate Company"')
       }, 1000)
     }
   }, 1000)
 }
 
+// accept money bonus, hand off to acceptReputation() if repFaction is set
 function acceptMoney(msg) {
   if (!auto) return
   if (postTimeout) return
@@ -954,6 +897,7 @@ function acceptMoney(msg) {
   }, 500)
 }
 
+// accept reputation bonus
 function acceptReputation() {
   cancelMyTimeout()
 
@@ -981,13 +925,8 @@ function acceptReputation() {
   }, 1000)
 }
 
-wnd.selectCompany = selectCompany
-wnd.acceptMoney = acceptMoney
-wnd.acceptReputation = acceptReputation
-
 function cancelMyTimeout() {
   if (postTimeout) {
-    // console.log('cancelMyTimeout() - clearing!')
     clearTimeout(postTimeout)
     postTimeout = null
   }
