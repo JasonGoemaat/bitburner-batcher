@@ -1,7 +1,15 @@
 /*
-1. You must have 12 gang members
-2. Gang members will start in state given the cycle plus their index modded cycle count
-3. Every 5 minutes, we increment the cycle count and re-assign jobs, ascending people moving into position 0
+
+A 'cycle' lasts 5 minutes and the current task for any given member on a cycle
+is set by taking the cycle and their member index and modding by the number
+of tasks in your list, so it should spread out tasks evenly among your members,
+and each one should progress through the list of tasks, although when you start
+only the first member will start on task 0.
+
+Set 'upgradeEquipmentNames' to a list of the gear you want to purchase,
+currently it gets a list of all equipment by type and includes all types.
+
+
 
 Jobs are:
  [
@@ -24,6 +32,8 @@ Jobs are:
 
 */
 
+const DURATION = 5 * 60 * 1000 // 5 minutes
+
 const newMemberNames = ('General Kenobi,General Zod,Admiral Akbar,Admiral Thrawn' +
     ',Colonel Duke,Colonel Nick Fury,Major Tom,Major Paine' +
     ',Corporal Klinger,Corporal Barnes,Sergeant Slaughter,Sergeant Smith').split(',')
@@ -43,7 +53,9 @@ export async function main(ns) {
   let cycle = 0
 
   // with 6 jobs and 12 members, we should have two members on each
-  let cycleTasks = ['Train Combat', 'Train Combat', 'Terrorism', 'Terrorism', 'Human Trafficking', 'Territory Warfare']
+  let cycleTasks = ['Train Combat', 'Train Combat',
+                    'Terrorism', 'Terrorism',
+                    'Human Trafficking', 'Territory Warfare']
 
   while (true) {
     let memberNames = ns.gang.getMemberNames()
@@ -71,7 +83,9 @@ export async function main(ns) {
       })
     }
 
-    await ns.sleep(5 * 60 * 1000) // wait 5 minutes
+    let cycleEnd = new Date(new Date().valueOf() + DURATION).toLocaleTimeString()
+    ns.print(`Next cycle at ${cycleEnd}`)
+    await ns.sleep(DURATION) // wait 5 minutes
     cycle++
   }
 
