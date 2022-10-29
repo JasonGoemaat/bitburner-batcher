@@ -64,7 +64,7 @@ export async function main(ns) {
       let taskIndex = (cycle + index) % cycleTasks.length
       if (taskIndex === 0) {
         let result = ns.gang.ascendMember(name)
-        if (result) ns.print(`INFO: Ascended gang member ${name}:\n      Hack:${sf(result.hack)}, Str:${sf(result.str)}, Def:${sf(result.def)}, Dex::${sf(result.dex)}, Agi::${sf(result.agi)}`)
+        if (result) ns.print(`INFO: Ascended gang member ${name}:\n      Hack:${sf(result.hack)}, Str:${sf(result.str)}, Def:${sf(result.def)}, Dex:${sf(result.dex)}, Agi:${sf(result.agi)}`)
         // if (result) ns.print(`INFO: Ascended gang member ${name}:\n      ${JSON.stringify(result)}`)
         purchaseEquipment(name)
       }
