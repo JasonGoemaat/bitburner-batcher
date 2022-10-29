@@ -18,7 +18,7 @@ export async function main(ns) {
 	while (true) {
 		let info = ns.corporation.getCorporation()
 		let funds = info.funds
-		let limit = Math.min(Math.max(info.revenue / 5, funds / 20), funds / 2)
+		let limit = Math.min(Math.max(info.revenue, funds / 2), funds / 2)
 		let names = ns.corporation.getUpgradeNames().filter(x => x !== 'DreamSense') // this one is counter-productive
 		let upgraded = false
 		names.forEach(name => {

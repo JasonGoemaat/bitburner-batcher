@@ -1,6 +1,6 @@
 /** @param {NS} ns */
 export async function main(ns) {
-  let TARGET_STORAGE = 0.05
+  let TARGET_STORAGE = 0.5
 
   ns.disableLog('ALL')
 	ns.tail()
@@ -8,7 +8,7 @@ export async function main(ns) {
 	let corp = ns.corporation
 	// let divName = 'IBM' // software
 	// let divName = 'TB' // Tobacco
-	let divName = 'U'
+	let divName = 'Software'
 	let div = corp.getDivision(divName)
 	let matSize = {
 		Water: 0.05,
