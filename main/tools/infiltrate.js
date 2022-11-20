@@ -126,7 +126,7 @@ const infiltrationGames = [
       const compareString2 = "Preparing?"
       const shouldPress = data.indexOf(compareString) >= 0 || data.indexOf(compareString2) >= 0
       wnd.lastSlashInfo = { data }
-      if ('wait' === state.game.data && (data.indexOf(compareString) + data.indexOf(compareString2) > -2)) {
+      if ('wait' === state.game.data && (data.indexOf(compareString) > -1)) {
         pressKey(" ")
         state.game.data = "done"
       }
