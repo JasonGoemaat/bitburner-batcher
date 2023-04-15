@@ -78,7 +78,7 @@ export async function main(ns) {
         if (ns.gang.recruitMember(name)) {
           ns.print(`INFO: Recruited new gang member '${name}`)
           ns.gang.setMemberTask(name, cycleTasks[0])
-          purchaseEquipment()
+          purchaseEquipment(name)
         }
       })
     }
